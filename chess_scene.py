@@ -1,0 +1,425 @@
+import threading
+import time
+import traceback
+
+import chess
+import ui
+from scene import Scene
+
+from chess_game import ChessGame
+from chess_ui import BoardRenderer, HudView, PromotionOverlay
+from lichess_engine import LichessCloudEngine
+from sunfish_engine import SunfishEngine
+
+
+class ChessScene(Scene):
+    def __init__(self):
+        super().__init__()
+        # Always-present core state (prevents AttributeError races)
+        self.game = ChessGame()
+
+        # Scene lifecycle flags
+        self.ready = False
+
+        # UI callbacks (set by host view)
+        self.on_ui_state_change = None
+
+        # Worker controls (initialized in setup)
+        self._ai_worker_running = False
+
+    # --------------------------------------------------
+    # Scene lifecycle
+    # --------------------------------------------------
+    def setup(self):
+        # ----- Engines / services -----
+        self.engine = SunfishEngine()
+        self._cloud_engine = LichessCloudEngine()
+        self.game.engine = self.engine
+
+        # ----- Rendering -----
+        self.board_view = BoardRenderer(self)
+        self.hud = HudView(self, z=200)
+        self.promo = PromotionOverlay(self, z=210)
+
+        # ----- Selection / promotion -----
+        self.selected = None
+        self._promo_active = False
+        self._promo_from = None
+        self._promo_to = None
+
+        # ----- AI worker state -----
+        self._ai_lock = threading.Lock()
+        self._ai_generation = 0
+        self._ai_thinking = False
+        self._ai_job = None
+
+        self._ai_worker_running = True
+        self._ai_worker = threading.Thread(target=self._ai_worker_loop, daemon=True)
+        self._ai_worker.start()
+
+        # ----- Cloud eval state -----
+        self._cloud_generation = 0
+        self._cloud_last_fen = None
+        self._cloud_inflight = False
+
+        # Initial draw + initial cloud
+        self.ready = True
+        self.redraw_all()
+        self._after_move_committed(initial=True)  # sets cloud pending + queues if needed
+
+    def stop(self):
+        """Call this when the scene/view is being dismissed to stop background work."""
+        self._ai_worker_running = False
+        with self._ai_lock:
+            self._ai_job = None
+            self._ai_thinking = False
+            self._ai_generation += 1
+
+    # --------------------------------------------------
+    # Layout / drawing
+    # --------------------------------------------------
+    def did_change_size(self):
+        if not self.ready:
+            return
+        self.redraw_all()
+
+    def redraw_all(self):
+        self.board_view.compute_geometry()
+        self.board_view.draw_squares()
+        self.board_view.sync_pieces(self.game.board)
+        self.board_view.refresh_overlays(self.game.board, self.selected)
+        self.hud.layout()
+        self.refresh_hud()
+
+    def flip_board(self):
+        if not self.ready:
+            return
+        self.board_view.toggle_flipped()
+        self.redraw_all()
+
+    def refresh_hud(self):
+        self.hud.update(
+            game=self.game,
+            ai_thinking=self._ai_thinking,
+            promo_active=self._promo_active,
+        )
+        self._notify_ui()
+
+    def _notify_ui(self):
+        cb = self.on_ui_state_change
+        if callable(cb):
+            cb()
+
+    # --------------------------------------------------
+    # Centralized state transitions
+    # --------------------------------------------------
+    def _invalidate_ai(self):
+        with self._ai_lock:
+            self._ai_generation += 1
+            self._ai_job = None
+            self._ai_thinking = False
+        self.refresh_hud()
+
+    def _after_position_changed(self):
+        """Pure UI sync after the board state changed."""
+        self.selected = None
+        self._clear_promotion_ui()
+        self.board_view.sync_pieces(self.game.board)
+        self.board_view.refresh_overlays(self.game.board, self.selected)
+        self.refresh_hud()
+
+    def _after_move_committed(self, *, initial: bool = False):
+        """
+        Central "post-commit" hook:
+          - clears & marks cloud pending (or book arrows when cloud disabled)
+          - queues cloud eval if appropriate
+          - schedules AI reply if appropriate
+        """
+        if not initial:
+            # AI jobs become stale after a committed move
+            self._invalidate_ai()
+
+        self._clear_cloud_eval()
+        self._queue_cloud_eval()
+        self.refresh_hud()
+        self._schedule_ai_if_needed()
+
+    # --------------------------------------------------
+    # Settings
+    # --------------------------------------------------
+    def apply_settings(
+        self,
+        *,
+        vs_ai,
+        ai_color,
+        ai_level,
+        opening_choice,
+        practice_tier,
+        show_sugg_arrows,
+        cloud_eval,
+    ):
+        if not self.ready:
+            return
+
+        self._invalidate_ai()
+
+        self.game.set_ai_settings(vs_ai=vs_ai, ai_color=ai_color, ai_level=ai_level)
+        self.board_view.set_flipped(vs_ai and ai_color == chess.WHITE)
+
+        self.game.set_opening(opening_choice)
+        self.game.set_practice_tier(practice_tier)
+        self.game.set_show_sugg_arrows(show_sugg_arrows)
+        self.game.set_cloud_eval(cloud_eval)
+
+        # Force cloud state to recompute consistently via centralized hook
+        self.redraw_all()
+        self._after_move_committed()
+
+    # --------------------------------------------------
+    # AI scheduling + worker
+    # --------------------------------------------------
+    def _schedule_ai_if_needed(self):
+        """
+        Only decides whether to start an AI job.
+        Does NOT touch cloud state.
+        """
+        if not self.game.vs_ai:
+            return
+
+        b = self.game.board
+        if b.is_game_over():
+            return
+
+        if b.turn != self.game.ai_color:
+            return
+
+        with self._ai_lock:
+            if self._ai_thinking:
+                return
+            self._ai_thinking = True
+            gen = self._ai_generation
+            self._ai_job = (b.fen(), self.game.ai_level, gen)
+
+        self.refresh_hud()
+
+    def _ai_worker_loop(self):
+        while self._ai_worker_running:
+            with self._ai_lock:
+                job = self._ai_job
+                self._ai_job = None
+
+            if job is None:
+                time.sleep(0.02)
+                continue
+
+            fen, level, gen = job
+            mv = None
+
+            try:
+                board = chess.Board(fen)
+                mv, _ = self.game.choose_ai_move(
+                    level=level,
+                    engine=self.engine,
+                    randomness=self.game.book_randomness,
+                    board=board,
+                )
+            except Exception:
+                print("[AI]", traceback.format_exc())
+
+            ui.delay(lambda mv=mv, gen=gen: self._apply_ai_move(mv, gen), 0)
+
+    def _apply_ai_move(self, mv, gen):
+        with self._ai_lock:
+            if gen != self._ai_generation:
+                self._ai_thinking = False
+                self.refresh_hud()
+                return
+            self._ai_thinking = False
+
+        if mv and self.game.apply_ai_move(mv):
+            self._after_position_changed()
+            # AI move committed → one centralized post-commit
+            self._after_move_committed()
+        else:
+            self.refresh_hud()
+
+    # --------------------------------------------------
+    # Cloud eval
+    # --------------------------------------------------
+    def _queue_cloud_eval(self):
+        if self.game.practice_phase == "READY":
+            return
+        if not self.game.cloud_eval_enabled:
+            return
+
+        fen = self.game.board.fen()
+        if fen == self._cloud_last_fen or self._cloud_inflight:
+            return
+
+        self._cloud_last_fen = fen
+        self._cloud_inflight = True
+        gen = self._cloud_generation
+        self._cloud_eval_background(fen, gen)
+
+    @ui.in_background
+    def _cloud_eval_background(self, fen, gen):
+        if not self.game.cloud_eval_enabled:
+            return
+        ce = self._cloud_engine.eval(fen, multipv=3)
+
+        def apply():
+            if gen != self._cloud_generation:
+                self._cloud_inflight = False
+                self._queue_cloud_eval()
+                return
+
+            self._cloud_inflight = False
+            self.game.cloud_eval = ce
+            self.game.cloud_eval_pending = False
+            self.game.suggested_moves = self.game.compute_suggest_moves(max_moves=2)
+            self.board_view.refresh_overlays(self.game.board, self.selected)
+            self.refresh_hud()
+
+        ui.delay(apply, 0)
+
+    def _clear_cloud_eval(self):
+        """
+        Central policy:
+          - Practice READY: no cloud work
+          - Cloud disabled: book suggestions (if arrows enabled), no "Cloud: ..."
+          - Cloud enabled: mark pending and clear arrows until result arrives
+        """
+        if self.game.practice_phase == "READY":
+            return
+
+        self._cloud_generation += 1
+        self._cloud_last_fen = None
+        self.game.cloud_eval = None
+
+        if not self.game.cloud_eval_enabled:
+            self.game.cloud_eval_pending = False
+            self.game.suggested_moves = (
+                self.game.compute_suggest_moves(max_moves=2)
+                if self.game.show_sugg_arrows
+                else []
+            )
+            self.board_view.refresh_overlays(self.game.board, self.selected)
+            return
+
+        self.game.cloud_eval_pending = True
+        self.game.suggested_moves = []
+
+    # --------------------------------------------------
+    # Game lifecycle
+    # --------------------------------------------------
+    def reset(self):
+        if not self.ready:
+            return
+        self.game.reset()
+        self._after_position_changed()
+        self._after_move_committed()
+
+    def undo(self):
+        if not self.ready:
+            return
+        if not self.game.can_undo():
+            return
+        self.game.undo_plies(2 if self.game.vs_ai else 1)
+        self._after_position_changed()
+        self._after_move_committed()
+
+    def redo(self):
+        if not self.ready:
+            return
+        if not self.game.can_redo():
+            return
+        self.game.redo_plies(2 if self.game.vs_ai else 1)
+        self._after_position_changed()
+        self._after_move_committed()
+
+    # --------------------------------------------------
+    # Promotion
+    # --------------------------------------------------
+    def _clear_promotion_ui(self):
+        self._promo_active = False
+        self._promo_from = None
+        self._promo_to = None
+        self.promo.clear()
+        self.hud.set_row1_override(None)
+
+    def _show_promotion_ui(self, from_sq, to_sq, pieces):
+        self._promo_active = True
+        self._promo_from = from_sq
+        self._promo_to = to_sq
+        self.hud.set_row1_override("Choose promotion")
+        self.refresh_hud()
+        self.promo.show(from_sq, to_sq, pieces)
+
+    def _on_promotion_choice(self, piece_type):
+        if not self._promo_active or self._promo_from is None or self._promo_to is None:
+            return
+        mv = chess.Move(self._promo_from, self._promo_to, promotion=piece_type)
+        self._clear_promotion_ui()
+        if self.game.make_human_move(mv):
+            self._after_position_changed()
+            self._after_move_committed()
+
+    # --------------------------------------------------
+    # Input
+    # --------------------------------------------------
+    def touch_ended(self, touch):
+        if not self.ready:
+            return
+
+        if self._promo_active:
+            self.promo.handle_touch(touch.location)
+            return
+
+        sq = self.board_view.pos_to_square(*touch.location)
+        if sq is None:
+            return
+
+        if self.selected is None:
+            piece = self.game.board.piece_at(sq)
+            if piece and piece.color == self.game.board.turn:
+                self.selected = sq
+                self.board_view.refresh_overlays(self.game.board, self.selected)
+                self.refresh_hud()
+            return
+
+        promo = self.game.legal_promotion_pieces(self.selected, sq)
+        if promo:
+            self._show_promotion_ui(self.selected, sq, promo)
+            return
+
+        mv = chess.Move(self.selected, sq)
+        if self.game.make_human_move(mv):
+            self._after_position_changed()
+            self._after_move_committed()
+            return
+
+        piece2 = self.game.board.piece_at(sq)
+        self.selected = sq if piece2 and piece2.color == self.game.board.turn else None
+        self.board_view.refresh_overlays(self.game.board, self.selected)
+        self.refresh_hud()
+
+    # --------------------------------------------------
+    # Import / Export
+    # --------------------------------------------------
+    def import_text(self, text):
+        ok, msg = self.game.import_pgn_or_fen(text)
+        if not ok:
+            return False, msg
+
+        # Import forces vs_ai off (UI convenience)
+        self.game.set_ai_settings(
+            vs_ai=False,
+            ai_color=self.game.ai_color,
+            ai_level=self.game.ai_level,
+        )
+        self._after_position_changed()
+        self._after_move_committed()
+        return True, msg
+
+    def export_text(self, mode):
+        return self.game.export_pgn() if mode == "pgn" else self.game.export_fen()

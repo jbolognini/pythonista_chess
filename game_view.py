@@ -1,0 +1,562 @@
+import ui
+import console
+import clipboard
+import chess
+from scene import SceneView
+
+from chess_scene import ChessScene
+from openings import opening_options
+
+
+OPENING_OPTIONS = opening_options()
+
+BAR_HEIGHT = 50
+ICON_SIZE = 32
+ICON_PADDING_X = 10
+
+
+# ============================================================
+# Settings View
+# ============================================================
+class SettingsView(ui.View):
+    def __init__(
+        self,
+        initial_vs_ai: bool = True,
+        initial_ai_color=chess.BLACK,
+        initial_level: int = 1,
+        initial_opening_choice=None,
+        initial_practice_tier: str = "beginner",
+        can_change_opening: bool = True,
+        initial_show_sugg_arrows: bool = True,
+        initial_cloud_eval: bool = False,
+        on_done=None,
+    ):
+        super().__init__()
+        self.name = "Settings"
+        self.background_color = "white"
+        self.on_done = on_done
+
+        self.can_change_opening = bool(can_change_opening)
+        self._opening_choice = initial_opening_choice
+        self._show_suggestion_arrows = bool(initial_show_sugg_arrows)
+        self._cloud_eval_enabled = bool(initial_cloud_eval)
+
+        # --- Controls ---
+        self.sw_vs_ai = ui.Switch(value=bool(initial_vs_ai))
+        self.sw_vs_ai.action = self._update_enabled_states
+
+        self.lbl_vs_ai = ui.Label(text="Play vs AI", font=("<System>", 16))
+
+        self.seg_ai_color = ui.SegmentedControl()
+        self.seg_ai_color.segments = ["AI plays Black", "AI plays White"]
+        self.seg_ai_color.selected_index = 0 if initial_ai_color == chess.BLACK else 1
+
+        self.lbl_level = ui.Label(text="AI Level", font=("<System>", 16))
+
+        self.sl_level = ui.Slider()
+        lvl = max(1, min(5, int(initial_level)))
+        self.sl_level.value = (lvl - 1) / 4.0
+        self.sl_level.action = self._on_level_slider_changed
+
+        self.lbl_level_value = ui.Label(text=str(lvl), font=("<System-Mono>", 16))
+        self.lbl_level_value.alignment = ui.ALIGN_RIGHT
+
+        self.lbl_opening = ui.Label(text="Opening practice", font=("<System>", 16))
+
+        self.btn_opening = ui.Button(title=self._opening_title(initial_opening_choice))
+        self.btn_opening.action = self._on_pick_opening
+        self.btn_opening.background_color = (0.95, 0.95, 0.95)
+        self.btn_opening.corner_radius = 8
+
+        self.lbl_tier = ui.Label(text="Practice depth", font=("<System>", 16))
+
+        self.seg_tier = ui.SegmentedControl()
+        self.seg_tier.segments = ["Beginner", "Master"]
+        self.seg_tier.selected_index = 1 if (initial_practice_tier == "master") else 0
+
+        self.lbl_show_sugg_arrows = ui.Label(text="Show Suggestion Arrows", font=("<System>", 16))
+
+        self.sw_show_sugg_arrows = ui.Switch(value=bool(initial_show_sugg_arrows))
+        self.sw_show_sugg_arrows.action = self._on_show_suggestion_arrows_changed
+
+        self.lbl_cloud_eval = ui.Label(text="Cloud Eval", font=("<System>", 16))
+
+        self.sw_cloud_eval = ui.Switch(value=bool(initial_cloud_eval))
+        self.sw_cloud_eval.action = self._on_cloud_eval_changed
+
+        self.btn_apply = ui.Button(title="Apply")
+        self.btn_apply.action = self._on_apply
+        self.btn_apply.background_color = (0.2, 0.55, 1.0)
+        self.btn_apply.tint_color = "white"
+        self.btn_apply.corner_radius = 8
+
+        self.btn_cancel = ui.Button(title="Cancel")
+        self.btn_cancel.action = self._on_cancel
+        self.btn_cancel.background_color = (0.9, 0.9, 0.9)
+        self.btn_cancel.corner_radius = 8
+
+        for v in (
+            self.lbl_vs_ai, self.sw_vs_ai, self.seg_ai_color,
+            self.lbl_level, self.sl_level, self.lbl_level_value,
+            self.lbl_opening, self.btn_opening,
+            self.lbl_tier, self.seg_tier,
+            self.lbl_show_sugg_arrows, self.sw_show_sugg_arrows,
+            self.lbl_cloud_eval, self.sw_cloud_eval,
+            self.btn_apply, self.btn_cancel,
+        ):
+            self.add_subview(v)
+
+        self._update_enabled_states(None)
+
+    def _opening_title(self, choice):
+        for title, key in OPENING_OPTIONS:
+            if key == choice:
+                return title
+        return "Free play"
+
+    def _level_int(self) -> int:
+        return int(round(self.sl_level.value * 4)) + 1  # 1..5
+
+    def _on_level_slider_changed(self, sender):
+        self.lbl_level_value.text = str(self._level_int())
+
+    def _update_enabled_states(self, sender):
+        vs_ai_enabled = bool(self.sw_vs_ai.value)
+        self.seg_ai_color.enabled = vs_ai_enabled
+        self.sl_level.enabled = vs_ai_enabled
+
+        self.btn_opening.enabled = self.can_change_opening
+        self.btn_opening.alpha = 1.0 if self.can_change_opening else 0.4
+        self.lbl_opening.text = "Opening practice" if self.can_change_opening else "Opening practice (reset to change)"
+
+    def _on_pick_opening(self, sender):
+        if not self.can_change_opening:
+            return
+        tv = ui.TableView()
+        tv.name = "Choose Opening"
+        tv.data_source = _OpeningPickerDataSource(self, tv)
+        tv.delegate = tv.data_source
+        tv.row_height = 44
+        tv.present("sheet")
+
+    def _on_show_suggestion_arrows_changed(self, sender):
+        self._show_suggestion_arrows = bool(sender.value)
+    
+    def _on_cloud_eval_changed(self, sender):
+        self._cloud_eval_enabled = bool(sender.value)
+    
+    def _on_apply(self, sender):
+        vs_ai = bool(self.sw_vs_ai.value)
+        ai_color = chess.BLACK if self.seg_ai_color.selected_index == 0 else chess.WHITE
+        level = self._level_int()
+        opening_choice = self._opening_choice
+        practice_tier = "master" if self.seg_tier.selected_index == 1 else "beginner"
+
+        if callable(self.on_done):
+            self.on_done(
+                vs_ai,
+                ai_color,
+                level,
+                opening_choice,
+                practice_tier,
+                bool(self._show_suggestion_arrows),
+                bool(self._cloud_eval_enabled),
+            )
+        self.close()
+
+    def _on_cancel(self, sender):
+        self.close()
+
+    def layout(self):
+        w = self.width
+        x = 20
+        y = 20
+
+        self.lbl_vs_ai.frame = (x, y, w - 120, 32)
+        self.sw_vs_ai.frame = (w - 70, y, 51, 31)
+
+        y += 50
+        self.seg_ai_color.frame = (x, y, w - 40, 32)
+
+        y += 55
+        self.lbl_level.frame = (x, y, w - 140, 32)
+        self.lbl_level_value.frame = (w - 100, y, 80, 32)
+
+        y += 40
+        self.sl_level.frame = (x, y, w - 40, 34)
+
+        y += 55
+        self.lbl_opening.frame = (x, y, w - 40, 32)
+
+        y += 40
+        self.btn_opening.frame = (x, y, w - 40, 44)
+
+        y += 60
+        self.lbl_tier.frame = (x, y, w - 40, 32)
+
+        y += 40
+        self.seg_tier.frame = (x, y, w - 40, 32)
+
+        y += 55
+        self.lbl_show_sugg_arrows.frame = (x, y, w - 120, 32)
+        self.sw_show_sugg_arrows.frame = (w - 70, y, 51, 31)
+
+        y += 55
+        self.lbl_cloud_eval.frame = (x, y, w - 120, 32)
+        self.sw_cloud_eval.frame = (w - 70, y, 51, 31)
+
+        y += 70
+        self.btn_apply.frame = (x, y, w - 40, 44)
+
+        y += 54
+        self.btn_cancel.frame = (x, y, w - 40, 44)
+
+
+class _OpeningPickerDataSource(object):
+    def __init__(self, parent: SettingsView, tableview: ui.TableView):
+        self.parent = parent
+        self.tv = tableview
+
+    def tableview_number_of_rows(self, tv, section):
+        return len(OPENING_OPTIONS)
+
+    def tableview_cell_for_row(self, tv, section, row):
+        title, key = OPENING_OPTIONS[row]
+        cell = ui.TableViewCell()
+        cell.text_label.text = title
+        if key == self.parent._opening_choice:
+            cell.accessory_type = "checkmark"
+        return cell
+
+    def tableview_did_select(self, tv, section, row):
+        title, key = OPENING_OPTIONS[row]
+        self.parent._opening_choice = key
+        self.parent.btn_opening.title = title
+        tv.close()
+
+
+# ============================================================
+# Import View
+# ============================================================
+class ImportView(ui.View):
+    def __init__(self, on_load=None):
+        super().__init__()
+        self.name = "Import PGN / FEN"
+        self.background_color = "white"
+        self.on_load = on_load
+
+        self.top_bar = ui.View()
+        self.top_bar.background_color = "#f2f2f2"
+        self.add_subview(self.top_bar)
+
+        self.btn_cancel = ui.Button(title="Cancel")
+        self.btn_cancel.action = self._on_cancel
+        self.top_bar.add_subview(self.btn_cancel)
+
+        self.btn_load = ui.Button(title="Load")
+        self.btn_load.action = self._on_load
+        self.btn_load.tint_color = (0.2, 0.55, 1.0)
+        self.top_bar.add_subview(self.btn_load)
+
+        self.lbl = ui.Label(text="Paste PGN or FEN below:")
+        self.lbl.font = ("<System>", 15)
+        self.lbl.text_color = "#333"
+        self.add_subview(self.lbl)
+
+        self.text_box = ui.View()
+        self.text_box.background_color = "#f0f0f0"
+        self.text_box.corner_radius = 8
+        self.add_subview(self.text_box)
+
+        self.text_view = ui.TextView()
+        self.text_view.font = ("<System>", 14)
+        self.text_view.background_color = "#f0f0f0"
+        self.text_view.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+        self.text_view.autocorrection_type = False
+        self.text_view.spellchecking_type = False
+        self.text_box.add_subview(self.text_view)
+
+    def layout(self):
+        w, h = self.width, self.height
+        top_h = 44
+        pad = 16
+
+        self.top_bar.frame = (0, 0, w, top_h)
+        self.btn_cancel.frame = (pad, 0, 90, top_h)
+        self.btn_load.frame = (w - pad - 90, 0, 90, top_h)
+
+        y = top_h + 16
+        self.lbl.frame = (pad, y, w - 2 * pad, 20)
+
+        y += 28
+        box_h = int(h * 0.33)
+        self.text_box.frame = (pad, y, w - 2 * pad, box_h)
+
+        inner_pad = 8
+        self.text_view.frame = (
+            inner_pad,
+            inner_pad,
+            self.text_box.width - 2 * inner_pad,
+            self.text_box.height - 2 * inner_pad,
+        )
+
+    def touch_began(self, touch):
+        self.text_view.end_editing()
+
+    def _on_load(self, sender):
+        self.text_view.end_editing()
+        text = (self.text_view.text or "").strip()
+        if callable(self.on_load):
+            self.on_load(text)
+        self.close()
+
+    def _on_cancel(self, sender):
+        self.text_view.end_editing()
+        self.close()
+
+
+# ============================================================
+# Game View
+# ============================================================
+class GameView(ui.View):
+    def __init__(self):
+        super().__init__()
+        self.name = "Bol Chess"
+        self.background_color = "white"
+
+        # Top bar
+        self.bar = ui.View(frame=(0, 0, 0, BAR_HEIGHT))
+        self.bar.flex = "W"
+        self.bar.background_color = "#f2f2f2"
+        self.add_subview(self.bar)
+
+        # Toolbar buttons (layout() positions them)
+        self.btn_undo = self._add_icon_button("iob:ios7_undo_32", self._on_undo, "Undo")
+        self.btn_redo = self._add_icon_button("iob:ios7_redo_32", self._on_redo, "Redo")
+        self.btn_reset = self._add_icon_button("iob:ios7_trash_32", self._on_reset, "Reset")
+        self.btn_flip = self._add_icon_button("iob:arrow_swap_32", self._on_flip, "Flip Board")
+        self.btn_import = self._add_icon_button("iob:ios7_download_32", self._on_import, "Import PGN or FEN")
+        self.btn_export = self._add_icon_button("iob:share_32", self._on_export, "Export PGN or FEN")
+        self.btn_settings = self._add_icon_button("iob:ios7_gear_32", self._on_settings, "Settings")
+
+        # Scene view
+        self.scene = ChessScene()
+        self.scene_view = SceneView(frame=(0, BAR_HEIGHT, 0, 0))
+        self.scene_view.scene = self.scene
+        self.scene_view.flex = "WH"
+        self.add_subview(self.scene_view)
+
+        self.scene.on_ui_state_change = self._update_toolbar_enabled
+
+        # Always start toolbar in a safe disabled state; scene will notify when ready
+        self._update_toolbar_enabled()
+
+    # ---- lifecycle ----
+    def will_close(self):
+        # Stop background threads cleanly
+        s = self.scene
+        if hasattr(s, "stop") and callable(s.stop):
+            try:
+                s.stop()
+            except Exception:
+                pass
+
+    # ---- helpers ----
+    def _scene_ready_game(self):
+        s = self.scene
+        if not getattr(s, "ready", False):
+            return None
+        return s.game
+
+    def _add_icon_button(self, icon_name, action, accessibility_label: str):
+        b = ui.Button()
+        b.image = ui.Image.named(icon_name)
+        b.tint_color = "#333"
+        b.action = action
+        b.accessibility_label = accessibility_label
+        self.bar.add_subview(b)
+        return b
+
+    def layout(self):
+        self.bar.frame = (0, 0, self.width, BAR_HEIGHT)
+        self.scene_view.frame = (0, BAR_HEIGHT, self.width, self.height - BAR_HEIGHT)
+
+        y = (BAR_HEIGHT - ICON_SIZE) / 2
+        gap = 28
+
+        # Left group: Undo, Redo, Reset, Flip
+        left_x = ICON_PADDING_X
+        self.btn_undo.frame = (left_x, y, ICON_SIZE, ICON_SIZE)
+        left_x += ICON_SIZE + gap
+        self.btn_redo.frame = (left_x, y, ICON_SIZE, ICON_SIZE)
+        left_x += ICON_SIZE + gap
+        self.btn_reset.frame = (left_x, y, ICON_SIZE, ICON_SIZE)
+        left_x += ICON_SIZE + gap
+        self.btn_flip.frame = (left_x, y, ICON_SIZE, ICON_SIZE)
+
+        # Right group: Export, Import, Settings
+        right_x = self.width - ICON_PADDING_X - ICON_SIZE
+        self.btn_settings.frame = (right_x, y, ICON_SIZE, ICON_SIZE)
+        right_x -= ICON_SIZE + gap
+        self.btn_import.frame = (right_x, y, ICON_SIZE, ICON_SIZE)
+        right_x -= ICON_SIZE + gap
+        self.btn_export.frame = (right_x, y, ICON_SIZE, ICON_SIZE)
+
+    def _set_enabled(self, button: ui.Button, enabled: bool):
+        button.enabled = bool(enabled)
+        button.alpha = 1.0 if enabled else 0.35
+
+    def _update_toolbar_enabled(self):
+        g = self._scene_ready_game()
+
+        if g is None:
+            # Pre-setup: disable anything that depends on move history
+            self._set_enabled(self.btn_undo, False)
+            self._set_enabled(self.btn_redo, False)
+            return
+
+        self._set_enabled(self.btn_undo, g.can_undo())
+        self._set_enabled(self.btn_redo, g.can_redo())
+
+    # --------------------------------------------------------
+    # Toolbar actions
+    # --------------------------------------------------------
+    def _on_undo(self, sender):
+        if self._scene_ready_game() is None:
+            return
+        self.scene.undo()
+
+    def _on_redo(self, sender):
+        if self._scene_ready_game() is None:
+            return
+        self.scene.redo()
+
+    def _on_reset(self, sender):
+        if self._scene_ready_game() is None:
+            return
+        r = console.alert(
+            "Reset game?",
+            "This will clear the board.",
+            "Reset",
+            "Cancel",
+            hide_cancel_button=True,
+        )
+        if r != 1:
+            return
+        self.scene.reset()
+
+    def _on_flip(self, sender):
+        if self._scene_ready_game() is None:
+            return
+        self.scene.flip_board()
+
+    def _on_import(self, sender):
+        if self._scene_ready_game() is None:
+            return
+
+        def do_import(text: str):
+            ok, msg = self.scene.import_text(text)
+            if not ok:
+                console.alert("Import failed", msg, "OK")
+
+        ImportView(on_load=do_import).present("sheet")
+
+    def _on_export(self, sender):
+        if self._scene_ready_game() is None:
+            return
+        ExportView(get_text_fn=self.scene.export_text).present("sheet")
+
+    def _on_settings(self, sender):
+        g = self._scene_ready_game()
+        if g is None:
+            return
+
+        can_change_opening = g.board_is_fresh()
+
+        def apply_settings(vs_ai, ai_color, level, opening_choice, practice_tier, show_sugg_arrows, cloud_eval):
+            self.scene.apply_settings(
+                vs_ai=vs_ai,
+                ai_color=ai_color,
+                ai_level=level,
+                opening_choice=opening_choice,
+                practice_tier=practice_tier,
+                show_sugg_arrows=show_sugg_arrows,
+                cloud_eval=cloud_eval,
+            )
+
+        SettingsView(
+            initial_vs_ai=g.vs_ai,
+            initial_ai_color=g.ai_color,
+            initial_level=g.ai_level,
+            initial_opening_choice=g.opening_choice,
+            initial_practice_tier=g.practice_tier,
+            can_change_opening=can_change_opening,
+            initial_show_sugg_arrows=g.show_sugg_arrows,
+            initial_cloud_eval=g.cloud_eval_enabled,
+            on_done=apply_settings,
+        ).present("sheet")
+
+
+# ============================================================
+# Export View
+# ============================================================
+class ExportView(ui.View):
+    def __init__(self, *, get_text_fn, on_close=None):
+        super().__init__()
+        self.name = "Export"
+        self.background_color = "white"
+        self._get_text_fn = get_text_fn
+        self._on_close = on_close
+
+        self.btn_copy = ui.Button(title="Copy")
+        self.btn_copy.action = self._on_copy
+
+        self.btn_close = ui.Button(title="Close")
+        self.btn_close.action = self._on_close_tapped
+
+        self.seg_mode = ui.SegmentedControl()
+        self.seg_mode.segments = ["FEN", "PGN"]
+        self.seg_mode.selected_index = 0
+        self.seg_mode.action = self._refresh
+
+        self.text = ui.TextView()
+        self.text.editable = False
+        self.text.background_color = (0.95, 0.95, 0.95)
+        self.text.font = ("<System-Mono>", 13)
+
+        for v in (self.btn_copy, self.btn_close, self.seg_mode, self.text):
+            self.add_subview(v)
+
+        self._refresh(None)
+
+    def layout(self):
+        w, h = self.width, self.height
+        pad = 12
+        top = 10
+        btn_w = 80
+        btn_h = 34
+
+        self.btn_close.frame = (pad, top, btn_w, btn_h)
+        self.btn_copy.frame = (w - pad - btn_w, top, btn_w, btn_h)
+
+        self.seg_mode.frame = (pad, top + btn_h + 8, w - 2 * pad, 32)
+
+        y = top + btn_h + 8 + 32 + 10
+        self.text.frame = (pad, y, w - 2 * pad, h - y - pad)
+
+    def _current_mode(self) -> str:
+        return "fen" if self.seg_mode.selected_index == 0 else "pgn"
+
+    def _refresh(self, sender):
+        mode = self._current_mode()
+        self.text.text = (self._get_text_fn(mode) or "").strip()
+
+    def _on_copy(self, sender):
+        t = (self.text.text or "").strip()
+        if t:
+            clipboard.set(t)
+
+    def _on_close_tapped(self, sender):
+        if callable(self._on_close):
+            self._on_close()
+        self.close()
