@@ -182,7 +182,7 @@ class BoardRenderer:
         # textures (scene can share)
         self._tex = getattr(scene, "_tex", None)
         if self._tex is None:
-            self._tex = {fn: Texture(f"assets/{fn}") for fn in PIECE_SPRITES.values()}
+            self._tex = {fn: Texture(f"assets/sprites/{fn}") for fn in PIECE_SPRITES.values()}
             scene._tex = self._tex
 
         # marker pool
