@@ -237,55 +237,215 @@ class _OpeningPickerDataSource(object):
 
 
 class _MovesListDataSource(object):
+    """
+    Compact move list: one ROW per full move (move number + White SAN + Black SAN),
+    with separate tappable buttons so White/Black jump work reliably.
+
+    - Tapping White button jumps to white ply for that move (if exists)
+    - Tapping Black button jumps to black ply for that move (if exists)
+    - Highlights the currently active ply
+    """
+
     def __init__(self, gv: "GameView"):
         self.gv = gv
 
+    # ---------------- internal helpers ----------------
     def _game(self):
         s = getattr(self.gv, "scene", None)
-        if not s or not getattr(s, "ready", False):
+        if s is None or not getattr(s, "ready", False):
             return None
         return s.game
 
-    def tableview_number_of_rows(self, tv, section):
+    def _moves(self):
         g = self._game()
-        if not g:
-            return 0
-        return len(g.san_move_list())
+        return g.san_move_list() if g else []
+
+    def _num_rows(self, moves_len: int) -> int:
+        return (moves_len + 1) // 2  # 2 plies per full move
+
+    def _ply_exists(self, moves_len: int, ply_1based: int) -> bool:
+        return 1 <= ply_1based <= moves_len
+    
+    def _strip_move_prefix(self, san: str) -> str:
+        s = (san or "").strip()
+        if not s:
+            return s
+    
+        # Remove leading "12." or "12..." if present
+        i = 0
+        n = len(s)
+    
+        # digits
+        while i < n and s[i].isdigit():
+            i += 1
+        if i == 0:
+            return s  # no leading digits
+    
+        # dot(s)
+        if i < n and s[i] == ".":
+            i += 1
+            if i < n and s[i] == ".":
+                i += 1
+                if i < n and s[i] == ".":
+                    i += 1
+    
+            # optional space after the prefix
+            while i < n and s[i] == " ":
+                i += 1
+    
+            return s[i:].strip()
+    
+        return s
+
+    # ---------------- cell building ----------------
+    def _ensure_subviews(self, cell: ui.TableViewCell):
+        cv = cell.content_view
+        if getattr(cell, "_ml_created", False):
+            return cell._ml_no, cell._ml_wbtn, cell._ml_bbtn
+
+        # Move number label
+        lbl_no = ui.Label()
+        lbl_no.font = ("<System-Mono>", 13)
+        lbl_no.text_color = "#333"
+        lbl_no.alignment = ui.ALIGN_RIGHT
+
+        # White move button
+        wbtn = ui.Button()
+        wbtn.font = ("<System>", 13)
+        wbtn.tint_color = "#222"
+        wbtn.background_color = (0, 0, 0, 0)
+        wbtn.corner_radius = 6
+        wbtn.action = self._on_tap_white
+
+        # Black move button
+        bbtn = ui.Button()
+        bbtn.font = ("<System>", 13)
+        bbtn.tint_color = "#222"
+        bbtn.background_color = (0, 0, 0, 0)
+        bbtn.corner_radius = 6
+        bbtn.action = self._on_tap_black
+
+        cv.add_subview(lbl_no)
+        cv.add_subview(wbtn)
+        cv.add_subview(bbtn)
+
+        cell._ml_created = True
+        cell._ml_no = lbl_no
+        cell._ml_wbtn = wbtn
+        cell._ml_bbtn = bbtn
+
+        return lbl_no, wbtn, bbtn
+
+    def _layout_subviews(self, tv: ui.TableView, cell: ui.TableViewCell):
+        lbl_no, wbtn, bbtn = self._ensure_subviews(cell)
+
+        row_h = tv.row_height or 34
+        total_w = tv.width or self.gv.moves_tv.width
+
+        pad_x = 8
+        no_w = 44
+        gap = 10
+        col_w = max(0, (total_w - pad_x * 2 - no_w - gap) / 2.0)
+
+        lbl_no.frame = (pad_x, 0, no_w, row_h)
+        wbtn.frame = (pad_x + no_w + gap, 2, col_w - 4, row_h - 4)
+        bbtn.frame = (pad_x + no_w + gap + col_w, 2, col_w - 4, row_h - 4)
+
+    # ---------------- jump actions ----------------
+    def _enter_review(self):
+        try:
+            self.gv._enter_review_mode()
+        except Exception:
+            pass
+
+    def _jump_to_ply(self, ply_1based: int):
+        self._enter_review()
+        self.gv.scene.jump_to_ply(ply_1based)
+        self.gv._update_toolbar_enabled()
+
+    def _on_tap_white(self, sender):
+        ply = int(getattr(sender, "ply", 0) or 0)
+        if ply > 0:
+            self._jump_to_ply(ply)
+
+    def _on_tap_black(self, sender):
+        ply = int(getattr(sender, "ply", 0) or 0)
+        if ply > 0:
+            self._jump_to_ply(ply)
+
+    # ---------------- datasource ----------------
+    def tableview_number_of_rows(self, tv, section):
+        moves = self._moves()
+        return self._num_rows(len(moves))
 
     def tableview_cell_for_row(self, tv, section, row):
-        g = self._game()
         cell = ui.TableViewCell()
-        cell.text_label.font = ("<System>", 13)
-        cell.text_label.text_color = "#222"
         cell.background_color = "#f2f2f2"
+        cell.content_view.background_color = "#f2f2f2"
 
+        # IMPORTANT: hide the default built-in label so we don't get "double text"
+        cell.text_label.text = ""
+        if cell.detail_text_label is not None:
+            cell.detail_text_label.text = ""
+    
+        self._layout_subviews(tv, cell)
+        lbl_no, wbtn, bbtn = cell._ml_no, cell._ml_wbtn, cell._ml_bbtn
+
+        g = self._game()
         if not g:
-            cell.text_label.text = ""
+            lbl_no.text = ""
+            wbtn.title = ""
+            bbtn.title = ""
+            wbtn.enabled = False
+            bbtn.enabled = False
             return cell
 
         moves = g.san_move_list()
-        if 0 <= row < len(moves):
-            cell.text_label.text = moves[row]
+        n = len(moves)
 
-        # Highlight current ply
-        cur_ply = g.current_ply()
-        if cur_ply > 0 and row == (cur_ply - 1):
-            cell.background_color = (0.85, 0.92, 1.0)
+        # indices into ply list
+        wi = row * 2       # 0-based ply index for White
+        bi = wi + 1        # 0-based ply index for Black
+
+        # move number display
+        lbl_no.text = f"{row + 1}."
+
+        w_san = self._strip_move_prefix(moves[wi]) if wi < n else ""
+        b_san = self._strip_move_prefix(moves[bi]) if bi < n else ""
+
+        # 1-based ply numbers for jumping
+        w_ply = wi + 1
+        b_ply = bi + 1
+
+        wbtn.title = w_san
+        bbtn.title = b_san
+
+        wbtn.ply = w_ply if self._ply_exists(n, w_ply) else 0
+        bbtn.ply = b_ply if self._ply_exists(n, b_ply) else 0
+
+        wbtn.enabled = bool(wbtn.ply)
+        bbtn.enabled = bool(bbtn.ply)
+
+        # highlight active ply
+        cur_ply = g.current_ply()          # position after cur_ply plies
+        active_idx = cur_ply - 1           # last played move index in moves list (0-based), -1 if none
+
+        # reset
+        wbtn.background_color = (0, 0, 0, 0)
+        bbtn.background_color = (0, 0, 0, 0)
+
+        if active_idx == wi:
+            wbtn.background_color = (0.85, 0.92, 1.0)
+        elif active_idx == bi:
+            bbtn.background_color = (0.85, 0.92, 1.0)
 
         return cell
 
+    # ---------------- delegate ----------------
     def tableview_did_select(self, tv, section, row):
-        g = self._game()
-        if not g:
-            return
-
-        # Enter review mode when user starts navigating history
-        self.gv._enter_review_mode()
-
-        # row is 0-based ply index
-        self.gv.scene.jump_to_ply(row + 1)
-        self.gv._update_toolbar_enabled()
-        
+        # Row tap doesn't know x position; do nothing to avoid wrong jumps.
+        # User taps White/Black button explicitly.
+        tv.selected_row = (-1, -1)
 
 # ============================================================
 # Import View
@@ -506,6 +666,7 @@ class GameView(ui.View):
         if not getattr(self.scene, "ready", False):
             return
         self.moves_tv.reload()
+        return
         # Keep selection synced to current ply (optional nice feel)
         try:
             ply = self.scene.game.current_ply()
