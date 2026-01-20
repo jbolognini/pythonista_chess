@@ -14,7 +14,9 @@
 #   wp.png, wn.png, wb.png, wr.png, wq.png, wk.png,
 #   bp.png, bn.png, bb.png, br.png, bq.png, bk.png
 
-import os
+from __future__ import annotations
+
+from pathlib import Path
 import shutil
 import time
 import ui
@@ -26,8 +28,8 @@ import ui
 
 OUT_SIZE = 512  # 256 or 512 safe for Scene
 
-RAW_SPRITES_DIR = "assets/raw_sprites"
-OUTPUT_SPRITES_DIR = "assets/sprites"
+RAW_SPRITES_DIR = Path("assets/raw_sprites")
+OUTPUT_SPRITES_DIR = Path("assets/sprites")
 
 
 # ----------------------------
@@ -46,25 +48,25 @@ PIECE_LETTERS = ("p", "n", "b", "r", "q", "k")
 # Paths
 # ----------------------------
 
-def project_root() -> str:
+def project_root() -> Path:
     # tools/ -> project root
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return Path(__file__).resolve().parent.parent
 
-def raw_sprites_dir() -> str:
-    return os.path.join(project_root(), RAW_SPRITES_DIR)
+def raw_sprites_dir() -> Path:
+    return project_root() / RAW_SPRITES_DIR
 
-def output_sprites_dir() -> str:
-    return os.path.join(project_root(), OUTPUT_SPRITES_DIR)
+def output_sprites_dir() -> Path:
+    return project_root() / OUTPUT_SPRITES_DIR
 
-def input_dirs() -> list[str]:
+def input_dirs() -> list[Path]:
     """
     Primary: assets/raw_sprites/
     Also accept: assets/raw_sprites/assets/ (in case downloads were nested)
     """
     base = raw_sprites_dir()
     dirs = [base]
-    nested = os.path.join(base, "assets")
-    if os.path.isdir(nested):
+    nested = base / "assets"
+    if nested.is_dir():
         dirs.append(nested)
     return dirs
 
@@ -148,8 +150,8 @@ def detect_target_name(filename: str) -> str | None:
 # Rendering
 # ----------------------------
 
-def safe_rerender_png(src_path: str, dst_path: str, out_size: int):
-    data = open(src_path, "rb").read()
+def safe_rerender_png(src_path: Path, dst_path: Path, out_size: int):
+    data = src_path.read_bytes()
     img = ui.Image.from_data(data)
     if img is None:
         raise RuntimeError("Image decode failed")
@@ -161,31 +163,32 @@ def safe_rerender_png(src_path: str, dst_path: str, out_size: int):
         img.draw(0, 0, out_size, out_size)
         fixed = ctx.get_image()
 
-    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-    with open(dst_path, "wb") as f:
-        f.write(fixed.to_png())
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    dst_path.write_bytes(fixed.to_png())
 
 
 # ----------------------------
 # IO helpers
 # ----------------------------
 
-def iter_candidate_pngs(dirs: list[str]) -> list[str]:
+def iter_candidate_pngs(dirs: list[Path]) -> list[Path]:
     """
     Non-recursive scan of input dirs. Ignores already-normalized target names to avoid reprocessing.
     """
-    out: list[str] = []
+    out: list[Path] = []
     for d in dirs:
-        if not os.path.isdir(d):
+        if not d.is_dir():
             continue
-        for fname in sorted(os.listdir(d)):
-            if not fname.lower().endswith(".png"):
+        for p in sorted(d.iterdir(), key=lambda x: x.name.lower()):
+            if not p.is_file():
                 continue
-            if fname.startswith("_"):
+            if p.suffix.lower() != ".png":
                 continue
-            if fname.lower() in TARGETS:
+            if p.name.startswith("_"):
                 continue
-            out.append(os.path.join(d, fname))
+            if p.name.lower() in TARGETS:
+                continue
+            out.append(p)
     return out
 
 
@@ -197,7 +200,7 @@ def main():
     in_dirs = input_dirs()
     out_dir = output_sprites_dir()
 
-    if not any(os.path.isdir(d) for d in in_dirs):
+    if not any(d.is_dir() for d in in_dirs):
         raise SystemExit(
             "Missing input folder.\n"
             f"Expected: {raw_sprites_dir()}"
@@ -207,35 +210,35 @@ def main():
     if not candidates:
         raise SystemExit(
             "No PNGs found to convert.\n"
-            "Looked in:\n - " + "\n - ".join(in_dirs)
+            "Looked in:\n - " + "\n - ".join(str(d) for d in in_dirs)
         )
 
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup_dir = os.path.join(out_dir, f"_backup_{stamp}")
-    os.makedirs(backup_dir, exist_ok=True)
+    backup_dir = out_dir / f"_backup_{stamp}"
+    backup_dir.mkdir(parents=True, exist_ok=True)
 
     produced: set[str] = set()
     kept_from: dict[str, str] = {}
 
     for src in candidates:
-        fname = os.path.basename(src)
+        fname = src.name
         target = detect_target_name(fname)
 
         if not target:
             print(f"Skipping (unrecognized): {fname}")
             continue
 
-        dst = os.path.join(out_dir, target)
+        dst = out_dir / target
 
         if target in produced:
             print(f"Skipping duplicate for {target}: {fname} (kept {kept_from[target]})")
             continue
 
         # Backup existing destination if present
-        if os.path.exists(dst):
-            shutil.copy2(dst, os.path.join(backup_dir, target))
+        if dst.exists():
+            shutil.copy2(str(dst), str(backup_dir / target))
 
         try:
             safe_rerender_png(src, dst, OUT_SIZE)
@@ -253,8 +256,10 @@ def main():
     else:
         print("\nAll 12 pieces generated successfully.")
 
-    print(f"\nInput dirs:   {', '.join(in_dirs)}")
-    print(f"Output dir:   {out_dir}")
+    print("\nInput dirs:")
+    for d in in_dirs:
+        print(" -", d)
+    print(f"\nOutput dir:   {out_dir}")
     print(f"Backup dir:   {backup_dir}")
 
 
