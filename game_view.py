@@ -11,6 +11,7 @@ from openings import opening_options
 OPENING_OPTIONS = opening_options()
 
 BAR_HEIGHT = 50
+BOTTOM_BAR_HEIGHT = 150
 ICON_SIZE = 32
 ICON_PADDING_X = 10
 
@@ -235,6 +236,57 @@ class _OpeningPickerDataSource(object):
         tv.close()
 
 
+class _MovesListDataSource(object):
+    def __init__(self, gv: "GameView"):
+        self.gv = gv
+
+    def _game(self):
+        s = getattr(self.gv, "scene", None)
+        if not s or not getattr(s, "ready", False):
+            return None
+        return s.game
+
+    def tableview_number_of_rows(self, tv, section):
+        g = self._game()
+        if not g:
+            return 0
+        return len(g.san_move_list())
+
+    def tableview_cell_for_row(self, tv, section, row):
+        g = self._game()
+        cell = ui.TableViewCell()
+        cell.text_label.font = ("<System>", 13)
+        cell.text_label.text_color = "#222"
+        cell.background_color = "#f2f2f2"
+
+        if not g:
+            cell.text_label.text = ""
+            return cell
+
+        moves = g.san_move_list()
+        if 0 <= row < len(moves):
+            cell.text_label.text = moves[row]
+
+        # Highlight current ply
+        cur_ply = g.current_ply()
+        if cur_ply > 0 and row == (cur_ply - 1):
+            cell.background_color = (0.85, 0.92, 1.0)
+
+        return cell
+
+    def tableview_did_select(self, tv, section, row):
+        g = self._game()
+        if not g:
+            return
+
+        # Enter review mode when user starts navigating history
+        self.gv._enter_review_mode()
+
+        # row is 0-based ply index
+        self.gv.scene.jump_to_ply(row + 1)
+        self.gv._update_toolbar_enabled()
+        
+
 # ============================================================
 # Import View
 # ============================================================
@@ -324,13 +376,38 @@ class GameView(ui.View):
         self.name = "Bol Chess"
         self.background_color = "white"
 
-        # Top bar
+        # Top bar (toolbar)
         self.bar = ui.View(frame=(0, 0, 0, BAR_HEIGHT))
         self.bar.flex = "W"
         self.bar.background_color = "#f2f2f2"
         self.add_subview(self.bar)
+        
+        # Bottom bar
+        self.bottom_bar = ui.View()
+        self.bottom_bar.background_color = "#f2f2f2"
+        self.bottom_bar.flex = "WT"
+        self.add_subview(self.bottom_bar)
+        
+        # Bottom bar: Done button for review mode
+        self.btn_moves_done = ui.Button(title="Done")
+        self.btn_moves_done.action = self._on_moves_done
+        self.btn_moves_done.enabled = False
+        self.btn_moves_done.alpha = 0.35
+        self.bottom_bar.add_subview(self.btn_moves_done)
+        
+        # Bottom bar: moves list
+        self.moves_tv = ui.TableView()
+        self.moves_tv.background_color = "#f2f2f2"
+        self.moves_tv.row_height = 34
+        self.moves_tv.separator_color = (0, 0, 0, 0.12)
 
-        # Toolbar buttons (layout() positions them)
+        self._moves_ds = _MovesListDataSource(self)
+        self.moves_tv.data_source = self._moves_ds
+        self.moves_tv.delegate = self._moves_ds
+
+        self.bottom_bar.add_subview(self.moves_tv)
+
+        # Top bar: toolbar buttons
         self.btn_undo = self._add_icon_button("iob:ios7_undo_32", self._on_undo, "Undo")
         self.btn_redo = self._add_icon_button("iob:ios7_redo_32", self._on_redo, "Redo")
         self.btn_reset = self._add_icon_button("iob:ios7_trash_32", self._on_reset, "Reset")
@@ -350,17 +427,15 @@ class GameView(ui.View):
 
         # Always start toolbar in a safe disabled state; scene will notify when ready
         self._update_toolbar_enabled()
+        self._refresh_moves_list()
 
     # ---- lifecycle ----
     def will_close(self):
-        # Stop background threads cleanly
-        s = self.scene
-        if hasattr(s, "stop") and callable(s.stop):
-            try:
-                s.stop()
-            except Exception:
-                pass
-
+        try:
+            self.scene.stop()
+        except Exception:
+            pass
+    
     # ---- helpers ----
     def _scene_ready_game(self):
         s = self.scene
@@ -379,7 +454,15 @@ class GameView(ui.View):
 
     def layout(self):
         self.bar.frame = (0, 0, self.width, BAR_HEIGHT)
-        self.scene_view.frame = (0, BAR_HEIGHT, self.width, self.height - BAR_HEIGHT)
+        self.bottom_bar.frame = (0, self.height - BOTTOM_BAR_HEIGHT, self.width, BOTTOM_BAR_HEIGHT)
+        
+        # SceneView gets sandwiched
+        self.scene_view.frame = (
+            0,
+            BAR_HEIGHT,
+            self.width,
+            self.height - BAR_HEIGHT - BOTTOM_BAR_HEIGHT
+        )
 
         y = (BAR_HEIGHT - ICON_SIZE) / 2
         gap = 28
@@ -401,10 +484,36 @@ class GameView(ui.View):
         self.btn_import.frame = (right_x, y, ICON_SIZE, ICON_SIZE)
         right_x -= ICON_SIZE + gap
         self.btn_export.frame = (right_x, y, ICON_SIZE, ICON_SIZE)
+        
+        # Bottom bar layout: Done button + list
+        pad = 10
+        btn_w = 70
+        btn_h = 32
+
+        self.btn_moves_done.frame = (self.bottom_bar.width - pad - btn_w, pad, btn_w, btn_h)
+        self.moves_tv.frame = (
+            0,
+            0,
+            self.bottom_bar.width - (btn_w + pad * 2),
+            self.bottom_bar.height,
+        )
 
     def _set_enabled(self, button: ui.Button, enabled: bool):
         button.enabled = bool(enabled)
         button.alpha = 1.0 if enabled else 0.35
+    
+    def _refresh_moves_list(self):
+        if not getattr(self.scene, "ready", False):
+            return
+        self.moves_tv.reload()
+        # Keep selection synced to current ply (optional nice feel)
+        try:
+            ply = self.scene.game.current_ply()
+            if ply > 0:
+                row = ply - 1
+                self.moves_tv.selected_row = (0, row)
+        except Exception:
+            pass
 
     def _update_toolbar_enabled(self):
         g = self._scene_ready_game()
@@ -415,9 +524,38 @@ class GameView(ui.View):
             self._set_enabled(self.btn_redo, False)
             return
 
-        self._set_enabled(self.btn_undo, g.can_undo())
-        self._set_enabled(self.btn_redo, g.can_redo())
+        # While reviewing history, freeze undo/redo to avoid confusing interactions
+        if self.scene.review_mode:
+            self._set_enabled(self.btn_undo, False)
+            self._set_enabled(self.btn_redo, False)
+        else:
+            self._set_enabled(self.btn_undo, g.can_undo())
+            self._set_enabled(self.btn_redo, g.can_redo())
+                
+        self._refresh_moves_list()
 
+    # --------------------------------------------------------
+    # Move list / review mode
+    # --------------------------------------------------------
+    def _enter_review_mode(self):
+        if not self.scene.ready:
+            return
+        self.scene.begin_review_mode()
+        self.btn_moves_done.enabled = True
+        self.btn_moves_done.alpha = 1.0
+        self._update_toolbar_enabled()
+
+    def _exit_review_mode(self):
+        if not self.scene.ready:
+            return
+        self.scene.end_review_mode()
+        self.btn_moves_done.enabled = False
+        self.btn_moves_done.alpha = 0.35
+        self._update_toolbar_enabled()
+
+    def _on_moves_done(self, sender):
+        self._exit_review_mode()
+        
     # --------------------------------------------------------
     # Toolbar actions
     # --------------------------------------------------------

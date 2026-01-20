@@ -93,6 +93,90 @@ class ChessGame:
 
     def can_redo(self) -> bool:
         return bool(self.redo_stack)
+    
+    def current_ply(self) -> int:
+        return len(self.board.move_stack)
+
+    def total_ply(self) -> int:
+        # Includes undone moves as well
+        return len(self.board.move_stack) + len(self.redo_stack)
+
+    def _full_line_moves(self) -> list[chess.Move]:
+        # board.move_stack is played; redo_stack holds undone moves with "next redo" at the END.
+        # Full line = played + remaining, where remaining is redo_stack reversed.
+        return list(self.board.move_stack) + list(reversed(self.redo_stack))
+
+    def jump_to_ply(self, target_ply: int) -> bool:
+        """
+        Jump to an absolute ply index in the current line (including undone moves).
+        0 = starting position
+        total_ply() = end of line
+
+        This rebuilds the board deterministically and reconstitutes redo_stack.
+        """
+        try:
+            t = int(target_ply)
+        except Exception:
+            return False
+
+        full = self._full_line_moves()
+        if t < 0 or t > len(full):
+            return False
+
+        # Rebuild board from scratch
+        b = chess.Board()
+        for mv in full[:t]:
+            if mv not in b.legal_moves:
+                # If something got inconsistent (e.g., imported weirdness), fail safely.
+                return False
+            b.push(mv)
+
+        self.board = b
+
+        # Remaining moves become redo stack; order must allow redo_plies() to pop next move
+        remaining = full[t:]               # next moves in forward order
+        self.redo_stack = list(reversed(remaining))  # so pop() yields next
+
+        # Clear transient practice/theory state and recompute phase
+        self._theory_started = False
+        self._practice_feedback = ""
+        self.update_practice_phase()
+        return True
+
+    def san_move_list(self) -> list[str]:
+        """
+        Returns a list of display strings, one per ply, for the *full line* (played + redo).
+        Example items: "1. e4", "... c5", "2. Nf3", "... d6"
+        """
+        full = self._full_line_moves()
+        out: list[str] = []
+        b = chess.Board()
+
+        for i, mv in enumerate(full):
+            ply = i + 1
+            move_no = (ply + 1) // 2
+            is_white = (ply % 2 == 1)
+
+            try:
+                san = b.san(mv)
+            except Exception:
+                san = mv.uci()
+
+            if is_white:
+                prefix = f"{move_no}. "
+            else:
+                prefix = "... "
+
+            out.append(prefix + san)
+
+            # advance
+            if mv in b.legal_moves:
+                b.push(mv)
+            else:
+                # if we can’t advance, still return what we have
+                break
+
+        return out
 
     def board_is_fresh(self) -> bool:
         return self.board.fen() == chess.Board().fen()

@@ -61,6 +61,9 @@ class ChessScene(Scene):
         self._cloud_generation = 0
         self._cloud_last_fen = None
         self._cloud_inflight = False
+        
+        # ----- Other -----
+        self.review_mode = False
 
         # Initial draw + initial cloud
         self.ready = True
@@ -144,6 +147,40 @@ class ChessScene(Scene):
         self.refresh_hud()
         self._schedule_ai_if_needed()
 
+    # -----------------------------------------------
+    # Review / history navigation mode
+    # -----------------------------------------------
+    def begin_review_mode(self):
+        """Freeze AI + cloud while the user is navigating move history."""
+        if not self.ready:
+            return
+        if self.review_mode:
+            return
+        self.review_mode = True
+    
+        # Stop any pending/active AI job so it can't apply into a historical position
+        self._invalidate_ai()
+    
+        # Stop cloud churn while reviewing
+        self._clear_cloud_eval()
+    
+        # Optional: HUD refresh (shows thinking cleared, etc.)
+        self.refresh_hud()
+    
+    def end_review_mode(self):
+        """Exit review mode and resume normal behavior from the current board position."""
+        if not self.ready:
+            return
+        if not self.review_mode:
+            return
+        self.review_mode = False
+    
+        # Resume cloud/AI behavior naturally from the current position
+        self._clear_cloud_eval()
+        self._queue_cloud_eval()
+        self.refresh_hud()
+        self._schedule_ai_if_needed()
+
     # --------------------------------------------------
     # Settings
     # --------------------------------------------------
@@ -184,6 +221,8 @@ class ChessScene(Scene):
         Does NOT touch cloud state.
         """
         if not self.game.vs_ai:
+            return
+        if self.review_mode:
             return
 
         b = self.game.board
@@ -229,6 +268,13 @@ class ChessScene(Scene):
             ui.delay(lambda mv=mv, gen=gen: self._apply_ai_move(mv, gen), 0)
 
     def _apply_ai_move(self, mv, gen):
+        # Prevent late AI result
+        if self.review_mode:
+            with self._ai_lock:
+                self._ai_thinking = False
+            self.refresh_hud()
+            return
+        
         with self._ai_lock:
             if gen != self._ai_generation:
                 self._ai_thinking = False
@@ -251,7 +297,9 @@ class ChessScene(Scene):
             return
         if not self.game.cloud_eval_enabled:
             return
-
+        if self.review_mode:
+            return
+            
         fen = self.game.board.fen()
         if fen == self._cloud_last_fen or self._cloud_inflight:
             return
@@ -263,8 +311,24 @@ class ChessScene(Scene):
 
     @ui.in_background
     def _cloud_eval_background(self, fen, gen):
+        # If cloud got turned off after we queued, unwind cleanly
         if not self.game.cloud_eval_enabled:
+            def apply_disabled():
+                if gen != self._cloud_generation:
+                    return
+                self._cloud_inflight = False
+                self.game.cloud_eval_pending = False
+                # Keep book arrows alive if enabled
+                self.game.suggested_moves = (
+                    self.game.compute_suggest_moves(max_moves=2)
+                    if self.game.show_sugg_arrows
+                    else []
+                )
+                self.board_view.refresh_overlays(self.game.board, self.selected)
+                self.refresh_hud()
+            ui.delay(apply_disabled, 0)
             return
+
         ce = self._cloud_engine.eval(fen, multipv=3)
 
         def apply():
@@ -281,7 +345,7 @@ class ChessScene(Scene):
             self.refresh_hud()
 
         ui.delay(apply, 0)
-
+        
     def _clear_cloud_eval(self):
         """
         Central policy:
@@ -336,6 +400,30 @@ class ChessScene(Scene):
         self.game.redo_plies(2 if self.game.vs_ai else 1)
         self._after_position_changed()
         self._after_move_committed()
+
+    def jump_to_ply(self, ply_index: int):
+        if not self.ready:
+            return False
+
+        self._invalidate_ai()
+
+        ok = self.game.jump_to_ply(ply_index)
+        if not ok:
+            # Even if jump fails, refresh to keep UI consistent
+            self._after_position_changed()
+            self.refresh_hud()
+            return False
+
+        self._after_position_changed()
+
+        # We jumped; treat as “position change” but not necessarily a “new move committed”.
+        # Still clear/requeue cloud eval so arrows/hud reflect the new position.
+        self._clear_cloud_eval()
+        self._queue_cloud_eval()
+
+        # If we landed on AI-to-move, let the AI respond naturally
+        self._schedule_ai_if_needed()
+        return True
 
     # --------------------------------------------------
     # Promotion
