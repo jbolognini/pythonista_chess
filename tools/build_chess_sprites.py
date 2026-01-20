@@ -26,7 +26,7 @@ import ui
 # CONFIG (edit these)
 # ----------------------------
 
-OUT_SIZE = 512  # 256 or 512 safe for Scene
+OUT_SIZE = 256  # 256 or 512 safe for Scene
 
 RAW_SPRITES_DIR = Path("assets/raw_sprites")
 OUTPUT_SPRITES_DIR = Path("assets/sprites")
@@ -157,11 +157,13 @@ def safe_rerender_png(src_path: Path, dst_path: Path, out_size: int):
         raise RuntimeError("Image decode failed")
 
     # Force a known-size RGBA canvas and scale to fill the square.
-    with ui.ImageContext(out_size, out_size) as ctx:
+    with ui.ImageContext(out_size, out_size, scale=1.0) as ctx:
         ui.set_color((0, 0, 0, 0))
         ui.Path.rect(0, 0, out_size, out_size).fill()
         img.draw(0, 0, out_size, out_size)
         fixed = ctx.get_image()
+    
+    print("scale:", fixed.scale, "size:", fixed.size)
 
     dst_path.parent.mkdir(parents=True, exist_ok=True)
     dst_path.write_bytes(fixed.to_png())
