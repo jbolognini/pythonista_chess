@@ -256,10 +256,6 @@ class _MovesListDataSource(object):
             return None
         return s.game
 
-    def _moves(self):
-        g = self._game()
-        return g.san_move_list() if g else []
-
     def _num_rows(self, moves_len: int) -> int:
         return (moves_len + 1) // 2  # 2 plies per full move
 
@@ -361,6 +357,7 @@ class _MovesListDataSource(object):
     def _jump_to_ply(self, ply_1based: int):
         self._enter_review()
         self.gv.scene.jump_to_ply(ply_1based)
+        self.gv._update_review_controls()
         self.gv._update_toolbar_enabled()
 
     def _on_tap_white(self, sender):
@@ -375,7 +372,8 @@ class _MovesListDataSource(object):
 
     # ---------------- datasource ----------------
     def tableview_number_of_rows(self, tv, section):
-        moves = self._moves()
+        g = self._game()
+        moves = g.san_move_list() if g else []
         return self._num_rows(len(moves))
 
     def tableview_cell_for_row(self, tv, section, row):
@@ -547,21 +545,7 @@ class GameView(ui.View):
         self.bottom_bar.background_color = "#f2f2f2"
         self.bottom_bar.flex = "WT"
         self.add_subview(self.bottom_bar)
-        
-        # Bottom bar: Cancel button for review mode
-        self.btn_moves_done = ui.Button(title="Cancel")
-        self.btn_moves_done.action = self._on_moves_done
-        self.btn_moves_done.enabled = False
-        self.btn_moves_done.alpha = 0.35
-        self.bottom_bar.add_subview(self.btn_moves_done)
-        
-        # Bottom bar: Fork button for review mode
-        self.btn_moves_fork = ui.Button(title="Fork")
-        self.btn_moves_fork.action = self._on_moves_fork
-        self.btn_moves_fork.enabled = False
-        self.btn_moves_fork.alpha = 0.35
-        self.bottom_bar.add_subview(self.btn_moves_fork)
-        
+                
         # Bottom bar: moves list
         self.moves_tv = ui.TableView()
         self.moves_tv.background_color = "#f2f2f2"
@@ -574,14 +558,24 @@ class GameView(ui.View):
 
         self.bottom_bar.add_subview(self.moves_tv)
 
-        # Top bar: toolbar buttons
-        self.btn_undo = self._add_icon_button("iob:ios7_undo_32", self._on_undo, "Undo")
-        self.btn_redo = self._add_icon_button("iob:ios7_redo_32", self._on_redo, "Redo")
-        self.btn_reset = self._add_icon_button("iob:ios7_trash_32", self._on_reset, "Reset")
-        self.btn_flip = self._add_icon_button("iob:arrow_swap_32", self._on_flip, "Flip Board")
-        self.btn_import = self._add_icon_button("iob:ios7_download_32", self._on_import, "Import PGN or FEN")
-        self.btn_export = self._add_icon_button("iob:share_32", self._on_export, "Export PGN or FEN")
-        self.btn_settings = self._add_icon_button("iob:ios7_gear_32", self._on_settings, "Settings")
+        # --- Bottom bar review controls ---
+        self.btn_moves_done  = self._add_icon_btn(self.bottom_bar, "iob:close_32", self._on_moves_done, "Cancel review", enabled=False)
+        self.btn_moves_fork  = self._add_icon_btn(self.bottom_bar, "iob:play_32",  self._on_moves_fork, "Play from here", enabled=False)
+        
+        self.btn_review_back  = self._add_icon_btn(self.bottom_bar, "iob:ios7_rewind_32",       self._on_review_back, "Back (review)", enabled=False)
+        self.btn_review_fwd   = self._add_icon_btn(self.bottom_bar, "iob:ios7_fastforward_32",  self._on_review_forward, "Forward (review)", enabled=False)
+        
+        self.btn_review_begin = self._add_icon_btn(self.bottom_bar, "iob:ios7_skipbackward_32", self._on_review_begin, "Beginning (review)", enabled=False)
+        self.btn_review_end   = self._add_icon_btn(self.bottom_bar, "iob:ios7_skipforward_32",  self._on_review_end, "End (review)", enabled=False)
+        
+        # --- Top bar toolbar buttons ---
+        self.btn_undo     = self._add_icon_btn(self.bar, "iob:ios7_undo_32", self._on_undo,     "Undo", enabled=False)
+        self.btn_redo     = self._add_icon_btn(self.bar, "iob:ios7_redo_32", self._on_redo,     "Redo", enabled=False)
+        self.btn_reset    = self._add_icon_btn(self.bar, "iob:ios7_trash_32", self._on_reset,    "Reset", enabled=True)
+        self.btn_flip     = self._add_icon_btn(self.bar, "iob:arrow_swap_32", self._on_flip,     "Flip Board", enabled=True)
+        self.btn_import   = self._add_icon_btn(self.bar, "iob:ios7_download_32", self._on_import,   "Import PGN or FEN", enabled=True)
+        self.btn_export   = self._add_icon_btn(self.bar, "iob:share_32",         self._on_export, "Export PGN or FEN", enabled=True)
+        self.btn_settings = self._add_icon_btn(self.bar, "iob:ios7_gear_32", self._on_settings, "Settings", enabled=True)
 
         # Scene view
         self.scene = ChessScene()
@@ -593,6 +587,7 @@ class GameView(ui.View):
         self.scene.on_ui_state_change = self._update_toolbar_enabled
 
         # Always start toolbar in a safe disabled state; scene will notify when ready
+        self._update_review_controls()
         self._update_toolbar_enabled()
         self._refresh_moves_list()
 
@@ -610,15 +605,16 @@ class GameView(ui.View):
             return None
         return s.game
 
-    def _add_icon_button(self, icon_name, action, accessibility_label: str):
+    def _add_icon_btn(self, parent_view, icon_name, action, label, *, enabled=True):
         b = ui.Button()
         b.image = ui.Image.named(icon_name)
         b.tint_color = "#333"
         b.action = action
-        b.accessibility_label = accessibility_label
-        self.bar.add_subview(b)
+        b.accessibility_label = label
+        parent_view.add_subview(b)
+        self._set_enabled(b, enabled)
         return b
-
+    
     def layout(self):
         self.bar.frame = (0, 0, self.width, BAR_HEIGHT)
         self.bottom_bar.frame = (0, self.height - BOTTOM_BAR_HEIGHT, self.width, BOTTOM_BAR_HEIGHT)
@@ -653,19 +649,35 @@ class GameView(ui.View):
         self.btn_export.frame = (right_x, y, ICON_SIZE, ICON_SIZE)
         
         # Bottom bar layout: Cancel and Fork buttons + list
+        # Bottom bar layout: moves list + 2-col controls strip (3 rows)
         pad = 10
-        btn_w = 70
-        btn_h = 32
+        btn_h = 40
+        row_gap = 8
+        col_gap = 8
+        col_w = 44
+        strip_w = pad + col_w + col_gap + col_w + pad
 
-        self.btn_moves_done.frame = (self.bottom_bar.width - pad - btn_w, pad, btn_w, btn_h)
-        self.btn_moves_fork.frame = (self.bottom_bar.width - pad - btn_w, pad + btn_h + pad, btn_w, btn_h)
-        self.moves_tv.frame = (
-            0,
-            0,
-            self.bottom_bar.width - (btn_w + pad * 2),
-            self.bottom_bar.height,
-        )
+        # Moves list gets the remaining width
+        self.moves_tv.frame = (0, 0, self.bottom_bar.width - strip_w, self.bottom_bar.height)
 
+        # Control strip origin (top-left)
+        sx = self.moves_tv.width + pad
+        sy = 0
+
+        # Row 1: Cancel | Fork
+        self.btn_moves_done.frame = (sx, sy, col_w, btn_h)
+        self.btn_moves_fork.frame = (sx + col_w + col_gap, sy, col_w, btn_h)
+
+        # Row 2: Back | Forward
+        sy2 = sy + btn_h + row_gap
+        self.btn_review_back.frame = (sx, sy2, col_w, btn_h)
+        self.btn_review_fwd.frame  = (sx + col_w + col_gap, sy2, col_w, btn_h)
+
+        # Row 3: Begin | End
+        sy3 = sy2 + btn_h + row_gap
+        self.btn_review_begin.frame = (sx, sy3, col_w, btn_h)
+        self.btn_review_end.frame   = (sx + col_w + col_gap, sy3, col_w, btn_h)
+        
     def _set_enabled(self, button: ui.Button, enabled: bool):
         button.enabled = bool(enabled)
         button.alpha = 1.0 if enabled else 0.35
@@ -674,15 +686,6 @@ class GameView(ui.View):
         if not getattr(self.scene, "ready", False):
             return
         self.moves_tv.reload()
-        return
-        # Keep selection synced to current ply (optional nice feel)
-        try:
-            ply = self.scene.game.current_ply()
-            if ply > 0:
-                row = ply - 1
-                self.moves_tv.selected_row = (0, row)
-        except Exception:
-            pass
 
     def _update_toolbar_enabled(self):
         g = self._scene_ready_game()
@@ -706,41 +709,112 @@ class GameView(ui.View):
     # --------------------------------------------------------
     # Move list / review mode
     # --------------------------------------------------------
+    def _update_review_controls(self):
+        """
+        Review controls policy:
+          - All review buttons are only enabled while scene.review_mode is True
+          - Within review mode:
+              * Back/Begin enabled if we are not already at ply 0
+              * Fwd/End enabled if we are not already at the end (total_ply)
+          - Cancel/Fork are enabled any time we're in review mode
+        """
+        in_review = self._review_nav_enabled()
+    
+        # All review controls (Cancel/Fork + nav)
+        review_buttons = (
+            self.btn_moves_done,
+            self.btn_moves_fork,
+            self.btn_review_back,
+            self.btn_review_fwd,
+            self.btn_review_begin,
+            self.btn_review_end,
+        )
+    
+        if not in_review:
+            for b in review_buttons:
+                self._set_enabled(b, False)
+            return
+    
+        # In review mode: base enable
+        for b in review_buttons:
+            self._set_enabled(b, True)
+    
+        # Now refine nav enable based on where we are in the line
+        g = self.scene.game
+        cur = int(g.current_ply())
+        end = int(g.total_ply())
+    
+        can_back = (cur > 0)
+        can_fwd  = (cur < end)
+    
+        self._set_enabled(self.btn_review_back,  can_back)
+        self._set_enabled(self.btn_review_begin, can_back)
+        self._set_enabled(self.btn_review_fwd, can_fwd)
+        self._set_enabled(self.btn_review_end, can_fwd)
+        
     def _enter_review_mode(self):
         if not self.scene.ready:
             return
         self.scene.begin_review_mode()
-        self.btn_moves_done.enabled = True
-        self.btn_moves_done.alpha = 1.0
-        self.btn_moves_fork.enabled = True
-        self.btn_moves_fork.alpha = 1.0
+        self._update_review_controls()
         self._update_toolbar_enabled()
-
+    
     def _exit_review_mode(self):
         if not self.scene.ready:
             return
         self.scene.end_review_mode()
-        self.btn_moves_done.enabled = False
-        self.btn_moves_done.alpha = 0.35
-        self.btn_moves_fork.enabled = False
-        self.btn_moves_fork.alpha = 0.35
+        self._update_review_controls()
         self._update_toolbar_enabled()
-
+    
     def _fork_review_mode(self):
         if not self.scene.ready:
             return
         self.scene.fork_review_mode()
-        self.btn_moves_done.enabled = False
-        self.btn_moves_done.alpha = 0.35
-        self.btn_moves_fork.enabled = False
-        self.btn_moves_fork.alpha = 0.35
+        self._update_review_controls()
         self._update_toolbar_enabled()
-
+    
     def _on_moves_done(self, sender):
         self._exit_review_mode()
         
     def _on_moves_fork(self, sender):
         self._fork_review_mode()
+
+    def _review_nav_enabled(self):
+        return bool(getattr(self.scene, "ready", False) and self.scene.review_mode)
+
+    def _on_review_back(self, sender):
+        if not self._review_nav_enabled():
+            return
+        g = self.scene.game
+        cur = g.current_ply()
+        self.scene.jump_to_ply(max(0, cur - 1))
+        self._update_review_controls()
+        self._update_toolbar_enabled()
+
+    def _on_review_forward(self, sender):
+        if not self._review_nav_enabled():
+            return
+        g = self.scene.game
+        cur = g.current_ply()
+        end = g.total_ply()
+        self.scene.jump_to_ply(min(end, cur + 1))
+        self._update_review_controls()
+        self._update_toolbar_enabled()
+
+    def _on_review_begin(self, sender):
+        if not self._review_nav_enabled():
+            return
+        self.scene.jump_to_ply(0)
+        self._update_review_controls()
+        self._update_toolbar_enabled()
+
+    def _on_review_end(self, sender):
+        if not self._review_nav_enabled():
+            return
+        g = self.scene.game
+        self.scene.jump_to_ply(g.total_ply())
+        self._update_review_controls()
+        self._update_toolbar_enabled()
         
     # --------------------------------------------------------
     # Toolbar actions
