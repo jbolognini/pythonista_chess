@@ -4,13 +4,14 @@ import traceback
 
 import chess
 import ui
-from scene import Scene
+from scene import Scene, ShapeNode
 
 from chess_game import ChessGame
 from chess_ui import BoardRenderer, HudView, PromotionOverlay
 from lichess_engine import LichessCloudEngine
 from sunfish_engine import SunfishEngine
 
+REVIEW_OVERLAY_ALPHA = 0.20
 
 class ChessScene(Scene):
     def __init__(self):
@@ -62,8 +63,19 @@ class ChessScene(Scene):
         self._cloud_last_fen = None
         self._cloud_inflight = False
         
-        # ----- Other -----
+        # ----- Review Mode -----
         self.review_mode = False
+        self._review_entry_ply = None
+        self._review_entry_selected = None
+        # A translucent review overlay
+        self._review_overlay = ShapeNode()
+        self._review_overlay.z_position = 150
+        self._review_overlay.alpha = 0.00
+        self._review_overlay.fill_color = (0, 0, 0)
+        self._review_overlay.stroke_color = (0, 0, 0)
+        self._review_overlay.line_width = 0
+        self._review_overlay.anchor_point = (0, 0)  # bottom-left anchor
+        self.add_child(self._review_overlay)
 
         # Initial draw + initial cloud
         self.ready = True
@@ -91,6 +103,14 @@ class ChessScene(Scene):
         self.board_view.draw_squares()
         self.board_view.sync_pieces(self.game.board)
         self.board_view.refresh_overlays(self.game.board, self.selected)
+        
+        # Update review mode overlay
+        s = self.board_view.square_size
+        ox, oy = self.board_view.origin
+        self._review_overlay.position = (ox, oy)
+        self._review_overlay.path = ui.Path.rect(0, 0, 8 * s, 8 * s)
+        self._review_overlay.alpha = REVIEW_OVERLAY_ALPHA if self.review_mode else 0.0
+        
         self.hud.layout()
         self.refresh_hud()
 
@@ -152,34 +172,64 @@ class ChessScene(Scene):
     # -----------------------------------------------
     def begin_review_mode(self):
         """Freeze AI + cloud while the user is navigating move history."""
-        if not self.ready:
+        if not self.ready or self.review_mode:
             return
-        if self.review_mode:
-            return
+    
         self.review_mode = True
+        self._review_overlay.alpha = REVIEW_OVERLAY_ALPHA
+        
+        # Remember where we entered review mode (so end_review_mode can "cancel")
+        self._review_entry_ply = len(self.game.board.move_stack)
+        self._review_entry_selected = self.selected
     
         # Stop any pending/active AI job so it can't apply into a historical position
         self._invalidate_ai()
     
-        # Stop cloud churn while reviewing
+        # Stop cloud churn while reviewing (and clear arrows/text as you prefer)
         self._clear_cloud_eval()
     
-        # Optional: HUD refresh (shows thinking cleared, etc.)
         self.refresh_hud()
     
-    def end_review_mode(self):
+    def fork_review_mode(self):
         """Exit review mode and resume normal behavior from the current board position."""
-        if not self.ready:
-            return
-        if not self.review_mode:
+        if not self.ready or not self.review_mode:
             return
         self.review_mode = False
+        self._review_overlay.alpha = 0.0
     
         # Resume cloud/AI behavior naturally from the current position
         self._clear_cloud_eval()
         self._queue_cloud_eval()
         self.refresh_hud()
         self._schedule_ai_if_needed()
+
+    def end_review_mode(self):
+        """Cancel review: revert to entry position and resume normal behavior."""
+        if not self.ready or not self.review_mode:
+            return
+    
+        entry = self._review_entry_ply
+        self._review_entry_ply = None
+    
+        self.review_mode = False
+        self._review_overlay.alpha = 0.0
+    
+        # Revert board back to where we entered review mode
+        if entry is not None:
+            ok = self.game.jump_to_ply(int(entry))
+            # Even if jump fails, force UI to sync to whatever state we're in
+            self._after_position_changed()
+        else:
+            # If we somehow didn't record, just resync
+            self._after_position_changed()
+    
+        # Restore selection if you want (optional)
+        self.selected = self._review_entry_selected if entry is not None else None
+        self._review_entry_selected = None
+        self.board_view.refresh_overlays(self.game.board, self.selected)
+    
+        # Resume cloud/AI behavior naturally from the restored position
+        self._after_move_committed()
 
     # --------------------------------------------------
     # Settings
@@ -467,6 +517,35 @@ class ChessScene(Scene):
         if sq is None:
             return
 
+        # Review mode: allow selection/exploration, but DO NOT commit moves.
+        if self.review_mode:
+            # If nothing selected yet, behave normally: select own piece.
+            if self.selected is None:
+                piece = self.game.board.piece_at(sq)
+                if piece and piece.color == self.game.board.turn:
+                    self.selected = sq
+                # Always refresh (tapping empty square clears nothing, just updates highlights)
+                self.board_view.refresh_overlays(self.game.board, self.selected)
+                self.refresh_hud()
+                return
+        
+            # Something is selected already:
+            # 1) If user tapped another of their own pieces, switch selection (normal behavior)
+            piece2 = self.game.board.piece_at(sq)
+            if piece2 and piece2.color == self.game.board.turn:
+                self.selected = sq
+                self.board_view.refresh_overlays(self.game.board, self.selected)
+                self.refresh_hud()
+                return
+        
+            # 2) Otherwise user is attempting a move/capture.
+            # In review mode we *block* the commit, but keep UI natural.
+            # Clear selection after an attempted move to mirror normal "move attempt finishes interaction".
+            self.selected = None
+            self.board_view.refresh_overlays(self.game.board, self.selected)
+            self.refresh_hud()
+            return
+    
         if self.selected is None:
             piece = self.game.board.piece_at(sq)
             if piece and piece.color == self.game.board.turn:

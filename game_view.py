@@ -548,12 +548,19 @@ class GameView(ui.View):
         self.bottom_bar.flex = "WT"
         self.add_subview(self.bottom_bar)
         
-        # Bottom bar: Done button for review mode
-        self.btn_moves_done = ui.Button(title="Done")
+        # Bottom bar: Cancel button for review mode
+        self.btn_moves_done = ui.Button(title="Cancel")
         self.btn_moves_done.action = self._on_moves_done
         self.btn_moves_done.enabled = False
         self.btn_moves_done.alpha = 0.35
         self.bottom_bar.add_subview(self.btn_moves_done)
+        
+        # Bottom bar: Fork button for review mode
+        self.btn_moves_fork = ui.Button(title="Fork")
+        self.btn_moves_fork.action = self._on_moves_fork
+        self.btn_moves_fork.enabled = False
+        self.btn_moves_fork.alpha = 0.35
+        self.bottom_bar.add_subview(self.btn_moves_fork)
         
         # Bottom bar: moves list
         self.moves_tv = ui.TableView()
@@ -645,12 +652,13 @@ class GameView(ui.View):
         right_x -= ICON_SIZE + gap
         self.btn_export.frame = (right_x, y, ICON_SIZE, ICON_SIZE)
         
-        # Bottom bar layout: Done button + list
+        # Bottom bar layout: Cancel and Fork buttons + list
         pad = 10
         btn_w = 70
         btn_h = 32
 
         self.btn_moves_done.frame = (self.bottom_bar.width - pad - btn_w, pad, btn_w, btn_h)
+        self.btn_moves_fork.frame = (self.bottom_bar.width - pad - btn_w, pad + btn_h + pad, btn_w, btn_h)
         self.moves_tv.frame = (
             0,
             0,
@@ -704,6 +712,8 @@ class GameView(ui.View):
         self.scene.begin_review_mode()
         self.btn_moves_done.enabled = True
         self.btn_moves_done.alpha = 1.0
+        self.btn_moves_fork.enabled = True
+        self.btn_moves_fork.alpha = 1.0
         self._update_toolbar_enabled()
 
     def _exit_review_mode(self):
@@ -712,10 +722,25 @@ class GameView(ui.View):
         self.scene.end_review_mode()
         self.btn_moves_done.enabled = False
         self.btn_moves_done.alpha = 0.35
+        self.btn_moves_fork.enabled = False
+        self.btn_moves_fork.alpha = 0.35
+        self._update_toolbar_enabled()
+
+    def _fork_review_mode(self):
+        if not self.scene.ready:
+            return
+        self.scene.fork_review_mode()
+        self.btn_moves_done.enabled = False
+        self.btn_moves_done.alpha = 0.35
+        self.btn_moves_fork.enabled = False
+        self.btn_moves_fork.alpha = 0.35
         self._update_toolbar_enabled()
 
     def _on_moves_done(self, sender):
         self._exit_review_mode()
+        
+    def _on_moves_fork(self, sender):
+        self._fork_review_mode()
         
     # --------------------------------------------------------
     # Toolbar actions
