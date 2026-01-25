@@ -531,6 +531,12 @@ class ChessScene(Scene):
         
             # Something is selected already:
             # 1) If user tapped another of their own pieces, switch selection (normal behavior)
+            # Tap same square again -> unselect (toggle)
+            if sq == self.selected:
+                self.selected = None
+                self.board_view.refresh_overlays(self.game.board, self.selected)
+                self.refresh_hud()
+                return
             piece2 = self.game.board.piece_at(sq)
             if piece2 and piece2.color == self.game.board.turn:
                 self.selected = sq
@@ -552,6 +558,12 @@ class ChessScene(Scene):
                 self.selected = sq
                 self.board_view.refresh_overlays(self.game.board, self.selected)
                 self.refresh_hud()
+            return
+        # Tap same square again -> unselect (toggle)
+        if sq == self.selected:
+            self.selected = None
+            self.board_view.refresh_overlays(self.game.board, self.selected)
+            self.refresh_hud()
             return
 
         promo = self.game.legal_promotion_pieces(self.selected, sq)
