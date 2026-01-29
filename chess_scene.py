@@ -6,7 +6,7 @@ import chess
 from scene import Scene, ShapeNode
 
 from chess_game import ChessGame
-from chess_ui import BoardRenderer, HudView, PromotionOverlay
+from chess_ui import BoardRenderer, HudView, PromotionOverlay, EvalBarView
 from engine_service import EngineService
 
 from sunfish_engine import SunfishEngine
@@ -88,6 +88,7 @@ class ChessScene(Scene):
         self.board_view = BoardRenderer(self)
         self.hud = HudView(self, z=200)
         self.promo = PromotionOverlay(self, z=210)
+        self.eval_bar = EvalBarView(self, z=140)
 
         # ----- Selection / promotion -----
         self.selected = None
@@ -131,11 +132,17 @@ class ChessScene(Scene):
         if not self.ready:
             return
         self.redraw_all()
-
+    
+    def update(self, dt=None):
+        if not dt:
+            dt = 1.0 / 60.0
+        self.eval_bar.step(dt)
+    
     def redraw_all(self):
         self.board_view.compute_geometry()
         self.board_view.draw_squares()
         self.board_view.sync_pieces(self.game.board)
+        self.eval_bar.layout_from_board(self.board_view, margin=10, width=14)
         self.board_view.refresh_overlays(self.game.board, self.selected)
 
         # Review overlay geometry
@@ -244,45 +251,36 @@ class ChessScene(Scene):
     def _request_engine_eval(self):
         if not self.engine_service:
             return
-
+    
         fen = self.game.board.fen()
         level = int(self.game.ai_level)
         gen = int(self._eval_gen)
-
-        # Mark pending on game (future eval bar can show "pending")
+    
         self.game.clear_eval(pending=True)
-
-        try:
-            self.engine_service.request_eval(fen=fen, level=level, gen=gen)
-        except Exception:
-            print("[EVAL]", traceback.format_exc())
-
-    def _on_eval_result(self, *, gen: int, fen: str, white_cp: int, **_kw):
-        # stale checks
+        self.eval_bar.set_pending(True)
+    
+        self.engine_service.request_eval(
+            fen=fen,
+            level=level,
+            gen=gen,
+        )
+        
+    def _on_eval_result(self, *, fen: str, white_cp: int, gen: int):
         if int(gen) != int(self._eval_gen):
             return
         if fen != self.game.board.fen():
             return
-
-        # clamp defensively
-        cp = int(white_cp)
-        if cp > EVAL_CLAMP_CP:
-            cp = EVAL_CLAMP_CP
-        elif cp < -EVAL_CLAMP_CP:
-            cp = -EVAL_CLAMP_CP
-
+    
+        cp = max(-EVAL_CLAMP_CP, min(EVAL_CLAMP_CP, int(white_cp)))
+    
         self.game.set_eval(white_cp=cp, source="engine", fen=fen)
-
-        norm = float(math.tanh(float(cp) / float(EVAL_TANH_SCALE_CP)))
-        self.eval_white_cp = cp
-        self.eval_norm = norm
-
-        # Current analysis sink (easy to swap for eval bar later)
-        print(f"EVAL: {cp:+d} cp   norm: {norm:+.3f}")
-
-        # Future:
-        # self.eval_bar.update(game=self.game)
-
+    
+        self.eval_bar.set_pending(False)
+        self.eval_bar.set_target_from_cp(
+            cp,
+            tanh_scale_cp=EVAL_TANH_SCALE_CP,
+        )
+        
     # --------------------------------------------------
     # AI scheduling (EngineService)
     # --------------------------------------------------

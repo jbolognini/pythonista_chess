@@ -1,5 +1,6 @@
 # chess_ui.py
 import ui
+import math
 import chess
 from scene import Scene, SpriteNode, ShapeNode, LabelNode, Texture
 
@@ -161,6 +162,158 @@ class PromotionOverlay:
 
         # No cancel semantics here (promotion is mandatory).
         return False
+        
+
+class EvalBarView:
+    """
+    Vertical eval bar, Scene-owned, positioned relative to BoardRenderer geometry.
+
+    - Uses normalized value in [-1..+1] where +1 = White winning.
+    - Renders as a full-height bar with a white/black split that moves with eval.
+    - Animates smoothly toward target (no blocking, no actions required).
+    """
+
+    def __init__(self, scene, *, z: int = 140):
+        self.scene = scene
+        self.z = int(z)
+
+        # Geometry
+        self._x = 0.0
+        self._y = 0.0
+        self._w = 12.0
+        self._h = 100.0
+
+        # State
+        self._value = 0.0          # current norm [-1..1]
+        self._target = 0.0         # target norm
+        self._pending = False      # optional visual
+
+        # Nodes (simple: background + fill)
+        self._bg = ShapeNode()
+        self._bg.z_position = self.z
+        self._bg.stroke_color = (0, 0, 0, 0)
+        self._bg.line_width = 0
+        self._bg.anchor_point = (0, 0)
+        scene.add_child(self._bg)
+
+        self._fill = ShapeNode()
+        self._fill.z_position = self.z + 1
+        self._fill.stroke_color = (0, 0, 0, 0)
+        self._fill.line_width = 0
+        self._fill.anchor_point = (0, 0)
+        scene.add_child(self._fill)
+
+        # A thin midline at "0.0" (optional)
+        self._mid = ShapeNode()
+        self._mid.z_position = self.z + 2
+        self._mid.stroke_color = (0, 0, 0, 0.25)
+        self._mid.fill_color = (0, 0, 0, 0)
+        self._mid.line_width = 1
+        self._mid.anchor_point = (0, 0)
+        scene.add_child(self._mid)
+
+        self.set_pending(True)  # until first eval arrives
+
+    # ----------------------------
+    # Public API
+    # ----------------------------
+    def set_pending(self, pending: bool) -> None:
+        self._pending = bool(pending)
+        # Simple pending look: slightly dim the fill
+        self._bg.alpha = 1.0
+        self._fill.alpha = 0.65 if self._pending else 1.0
+
+    def set_target(self, norm: float) -> None:
+        # clamp
+        try:
+            n = float(norm)
+        except Exception:
+            n = 0.0
+        if n > 1.0:
+            n = 1.0
+        elif n < -1.0:
+            n = -1.0
+        self._target = n
+
+    def set_target_from_cp(self, cp: int, *, tanh_scale_cp: float = 400.0) -> None:
+        # same normalization you already use
+        n = math.tanh(float(cp) / float(tanh_scale_cp))
+        self.set_target(n)
+
+    def layout_from_board(self, board_view, *, margin: float = 10.0, width: float = 14.0) -> None:
+        """
+        Place the bar to the LEFT of the board, vertically aligned to board.
+        """
+        s = float(board_view.square_size)
+        ox, oy = board_view.origin
+
+        self._h = 8.0 * s
+        self._w = float(width)
+
+        self._x = float(ox) - float(margin) - self._w
+        self._y = float(oy)
+
+        # Update static paths/positions
+        self._bg.position = (self._x, self._y)
+        self._bg.path = ui.Path.rect(0, 0, self._w, self._h)
+        self._bg.fill_color = (0.15, 0.15, 0.15)  # frame
+
+        self._mid.position = (self._x, self._y)
+        mid_y = self._h * 0.5
+        p = ui.Path()
+        p.move_to(0, mid_y)
+        p.line_to(self._w, mid_y)
+        self._mid.path = p
+
+        # Fill depends on value, so render now
+        self._render_fill()
+
+    def step(self, dt: float) -> None:
+        """
+        Call from Scene.update(dt).
+        Smoothly animates _value -> _target.
+        """
+        # If not laid out yet, nothing to do.
+        if self._h <= 0.0:
+            return
+
+        # Critically damped-ish exponential smoothing
+        # Larger k = snappier.
+        k = 10.0
+        a = 1.0 - math.exp(-k * max(0.0, float(dt)))
+        self._value = (1.0 - a) * self._value + a * self._target
+
+        self._render_fill()
+
+    # ----------------------------
+    # Rendering
+    # ----------------------------
+    def _render_fill(self) -> None:
+        """
+        Fill indicates eval:
+          - White area from split -> top
+          - Black area from bottom -> split
+        split is mapped by (value+1)/2.
+        """
+        # Convert [-1..1] -> [0..1] where 0 = black winning, 1 = white winning
+        t = (self._value + 1.0) * 0.5
+        if t < 0.0:
+            t = 0.0
+        elif t > 1.0:
+            t = 1.0
+
+        split_y = self._h * t
+
+        # We draw a single "fill" node as the WHITE region, and let bg read as dark.
+        # (Looks like a chess eval bar: dark base + white cap.)
+        self._fill.position = (self._x, self._y)
+        self._fill.path = ui.Path.rect(0, split_y, self._w, self._h - split_y)
+
+        # White cap
+        self._fill.fill_color = (0.92, 0.92, 0.92)  # white-ish
+
+        # Make the background more black-ish
+        self._bg.fill_color = (0.08, 0.08, 0.08)
 
 
 class BoardRenderer:
