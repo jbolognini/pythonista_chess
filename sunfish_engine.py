@@ -145,6 +145,52 @@ class SunfishEngine:
 
         return best_chunk[0][1]
 
+    def eval_position(self, board: chess.Board, *, level: int = 3) -> int:
+        """
+        Returns an eval in centipawns from side-to-move perspective,
+        using the same search settings as choose_move().
+    
+        Positive => side to move is better.
+        """
+        if board.is_game_over():
+            if board.is_checkmate():
+                return -MATE_SCORE
+            return 0
+    
+        time_limits = {1: 0.06, 2: 0.18, 3: 0.54, 4: 1.5, 5: 5.0}
+        self._nodes = 0
+        self._deadline = time.perf_counter() + time_limits.get(int(level), 0.22)
+    
+        depth, _top_n, _noise = self._level_params(int(level))
+    
+        alpha = -10**9
+        beta = 10**9
+        best = -10**9
+    
+        moves = list(board.legal_moves)
+        if not moves:
+            return self._evaluate(board)
+    
+        moves.sort(key=lambda m: self._move_order_key(board, m), reverse=True)
+    
+        for mv in moves:
+            board.push(mv)
+            score = -self._alphabeta(board, depth - 1, -beta, -alpha)
+            board.pop()
+    
+            if score > best:
+                best = score
+            if score > alpha:
+                alpha = score
+    
+            if self._time_up():
+                break
+    
+        if best == -10**9:
+            return self._evaluate(board)
+    
+        return int(best)
+
     def _level_params(self, level: int):
         if level <= 1:
             return (1, 5, 120)

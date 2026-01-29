@@ -1,6 +1,8 @@
+# chess_scene.py
 import threading
 import time
 import traceback
+import math
 
 import chess
 import ui
@@ -12,6 +14,8 @@ from lichess_engine import LichessCloudEngine
 from sunfish_engine import SunfishEngine
 
 REVIEW_OVERLAY_ALPHA = 0.20
+EVAL_TANH_SCALE_CP = 400.0 # bigger = bar moves less; smaller = confirms faster
+EVAL_CLAMP_CP = 2000 # clamp to avoid insane swings
 
 class ChessScene(Scene):
     def __init__(self):
@@ -133,9 +137,9 @@ class ChessScene(Scene):
         if callable(cb):
             cb()
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Centralized state transitions
-    # --------------------------------------------------
+    # -----------------------------------------------
     def _invalidate_ai(self):
         with self._ai_lock:
             self._ai_generation += 1
@@ -143,6 +147,47 @@ class ChessScene(Scene):
             self._ai_thinking = False
         self.refresh_hud()
 
+    def _eval_white_cp(self, board: chess.Board) -> int:
+        """
+        Fast eval in centipawns, normalized to White perspective (+ = White better).
+        Uses SunfishEngine._evaluate() which is from side-to-move perspective.
+        """
+        # terminal positions
+        if board.is_checkmate():
+            return -EVAL_CLAMP_CP if board.turn == chess.WHITE else EVAL_CLAMP_CP
+        if board.is_stalemate() or board.is_insufficient_material():
+            return 0
+    
+        # side-to-move eval -> White perspective
+        stm_cp = int(self.engine.eval_position(board, level=self.game.ai_level))
+        white_cp = stm_cp if board.turn == chess.WHITE else -stm_cp
+    
+        # clamp
+        if white_cp > EVAL_CLAMP_CP:
+            white_cp = EVAL_CLAMP_CP
+        elif white_cp < -EVAL_CLAMP_CP:
+            white_cp = -EVAL_CLAMP_CP
+    
+        return white_cp
+    
+    def _print_eval(self, tag: str = ""):
+        """
+        Call after moves to print eval and keep normalized value around for an eval bar.
+        """
+        if self.review_mode:
+            return
+    
+        b = self.game.board
+        white_cp = self._eval_white_cp(b)
+        norm = float(math.tanh(float(white_cp) / float(EVAL_TANH_SCALE_CP)))
+    
+        # optional: store for future eval bar
+        self.eval_white_cp = white_cp
+        self.eval_norm = norm
+    
+        suffix = f" [{tag}]" if tag else ""
+        print(f"EVAL{suffix}: {white_cp:+d} cp   norm: {norm:+.3f}")
+    
     def _after_position_changed(self):
         """Pure UI sync after the board state changed."""
         self.selected = None
@@ -166,6 +211,7 @@ class ChessScene(Scene):
         self._queue_cloud_eval()
         self.refresh_hud()
         self._schedule_ai_if_needed()
+        self._print_eval()
 
     # -----------------------------------------------
     # Review / history navigation mode
@@ -231,9 +277,9 @@ class ChessScene(Scene):
         # Resume cloud/AI behavior naturally from the restored position
         self._after_move_committed()
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Settings
-    # --------------------------------------------------
+    # -----------------------------------------------
     def apply_settings(
         self,
         *,
@@ -339,9 +385,9 @@ class ChessScene(Scene):
         else:
             self.refresh_hud()
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Cloud eval
-    # --------------------------------------------------
+    # -----------------------------------------------
     def _queue_cloud_eval(self):
         if self.game.practice_phase == "READY":
             return

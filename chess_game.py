@@ -53,6 +53,10 @@ class ChessGame:
 
         # History
         self.redo_stack: list[chess.Move] = []
+        
+        # Eval
+        self.eval_cp = None # centipawns, + = White
+        self.eval_source = None # "engine" | "cloud"
 
         # Suggestions / cloud
         self.suggested_moves: list[SuggestMove] = []
