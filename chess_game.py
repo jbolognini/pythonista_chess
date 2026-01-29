@@ -13,6 +13,9 @@ PROMOTION_PIECES = (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
 MATE_CP = 200_000
 
 
+# ---------------------------------------------------------
+# Suggestion model (cloud/book)
+# ---------------------------------------------------------
 @dataclass(frozen=True)
 class SuggestMove:
     uci: str
@@ -40,23 +43,31 @@ def arrow_weights(best: SuggestMove, second: SuggestMove | None) -> tuple[float,
     return w1, w2
 
 
+# ---------------------------------------------------------
+# Game
+# ---------------------------------------------------------
 class ChessGame:
     """
     Core game state + practice/theory/book logic.
 
     UI-agnostic: Scene owns rendering, input, threading, and cloud request lifecycle.
+
+    Engine note:
+      - ChessGame does NOT call local engines directly. Local engine work is performed by EngineService.
+      - ChessGame stores eval and other derived analysis as pure state.
     """
 
     def __init__(self):
         self.board = chess.Board()
-        self.engine = None
 
         # History
         self.redo_stack: list[chess.Move] = []
-        
-        # Eval
-        self.eval_cp = None # centipawns, + = White
-        self.eval_source = None # "engine" | "cloud"
+
+        # Eval (White perspective: + = White better)
+        self.eval_cp: int | None = None
+        self.eval_source: str | None = None   # "engine" | "cloud" | ...
+        self.eval_fen: str | None = None      # fen that produced eval_cp
+        self.eval_pending: bool = False       # optional, helps UI show "thinking" later
 
         # Suggestions / cloud
         self.suggested_moves: list[SuggestMove] = []
@@ -90,14 +101,14 @@ class ChessGame:
         self._practice_feedback = ""
 
     # =========================================================
-    # Small UI-facing helpers (keeps GameView decoupled)
+    # Small UI-facing helpers (keeps Scene decoupled)
     # =========================================================
     def can_undo(self) -> bool:
         return bool(self.board.move_stack)
 
     def can_redo(self) -> bool:
         return bool(self.redo_stack)
-    
+
     def current_ply(self) -> int:
         return len(self.board.move_stack)
 
@@ -110,80 +121,26 @@ class ChessGame:
         # Full line = played + remaining, where remaining is redo_stack reversed.
         return list(self.board.move_stack) + list(reversed(self.redo_stack))
 
-    def jump_to_ply(self, target_ply: int) -> bool:
-        """
-        Jump to an absolute ply index in the current line (including undone moves).
-        0 = starting position
-        total_ply() = end of line
-
-        This rebuilds the board deterministically and reconstitutes redo_stack.
-        """
-        try:
-            t = int(target_ply)
-        except Exception:
-            return False
-
-        full = self._full_line_moves()
-        if t < 0 or t > len(full):
-            return False
-
-        # Rebuild board from scratch
-        b = chess.Board()
-        for mv in full[:t]:
-            if mv not in b.legal_moves:
-                # If something got inconsistent (e.g., imported weirdness), fail safely.
-                return False
-            b.push(mv)
-
-        self.board = b
-
-        # Remaining moves become redo stack; order must allow redo_plies() to pop next move
-        remaining = full[t:]               # next moves in forward order
-        self.redo_stack = list(reversed(remaining))  # so pop() yields next
-
-        # Clear transient practice/theory state and recompute phase
-        self._theory_started = False
-        self._practice_feedback = ""
-        self.update_practice_phase()
-        return True
-
-    def san_move_list(self) -> list[str]:
-        """
-        Returns a list of display strings, one per ply, for the *full line* (played + redo).
-        Example items: "1. e4", "... c5", "2. Nf3", "... d6"
-        """
-        full = self._full_line_moves()
-        out: list[str] = []
-        b = chess.Board()
-
-        for i, mv in enumerate(full):
-            ply = i + 1
-            move_no = (ply + 1) // 2
-            is_white = (ply % 2 == 1)
-
-            try:
-                san = b.san(mv)
-            except Exception:
-                san = mv.uci()
-
-            if is_white:
-                prefix = f"{move_no}. "
-            else:
-                prefix = "... "
-
-            out.append(prefix + san)
-
-            # advance
-            if mv in b.legal_moves:
-                b.push(mv)
-            else:
-                # if we can’t advance, still return what we have
-                break
-
-        return out
-
     def board_is_fresh(self) -> bool:
         return self.board.fen() == chess.Board().fen()
+
+    # =========================================================
+    # Eval state (owned by game; computed elsewhere)
+    # =========================================================
+    def set_eval(self, *, white_cp: int | None, source: str | None, fen: str | None = None) -> None:
+        """
+        Store a local eval in centipawns from White perspective (+ = White better).
+        """
+        self.eval_cp = int(white_cp) if white_cp is not None else None
+        self.eval_source = str(source) if source else None
+        self.eval_fen = str(fen) if fen else None
+        self.eval_pending = False
+
+    def clear_eval(self, *, pending: bool = False) -> None:
+        self.eval_cp = None
+        self.eval_source = None
+        self.eval_fen = None
+        self.eval_pending = bool(pending)
 
     # =========================================================
     # Configuration
@@ -242,6 +199,43 @@ class ChessGame:
         self.practice_show_hints = False
         self.update_practice_phase()
 
+    def jump_to_ply(self, target_ply: int) -> bool:
+        """
+        Jump to an absolute ply index in the current line (including undone moves).
+        0 = starting position
+        total_ply() = end of line
+
+        This rebuilds the board deterministically and reconstitutes redo_stack.
+        """
+        try:
+            t = int(target_ply)
+        except Exception:
+            return False
+
+        full = self._full_line_moves()
+        if t < 0 or t > len(full):
+            return False
+
+        # Rebuild board from scratch
+        b = chess.Board()
+        for mv in full[:t]:
+            if mv not in b.legal_moves:
+                # If something got inconsistent (e.g., imported weirdness), fail safely.
+                return False
+            b.push(mv)
+
+        self.board = b
+
+        # Remaining moves become redo stack; order must allow redo_plies() to pop next move
+        remaining = full[t:]                      # next moves in forward order
+        self.redo_stack = list(reversed(remaining))  # so pop() yields next
+
+        # Clear transient practice/theory state and recompute phase
+        self._theory_started = False
+        self._practice_feedback = ""
+        self.update_practice_phase()
+        return True
+
     def undo_plies(self, plies: int = 1) -> None:
         for _ in range(int(plies)):
             if not self.board.move_stack:
@@ -262,6 +256,36 @@ class ChessGame:
 
     def _clear_redo(self) -> None:
         self.redo_stack.clear()
+
+    def san_move_list(self) -> list[str]:
+        """
+        Returns a list of display strings, one per ply, for the *full line* (played + redo).
+        Example items: "1. e4", "... c5", "2. Nf3", "... d6"
+        """
+        full = self._full_line_moves()
+        out: list[str] = []
+        b = chess.Board()
+
+        for i, mv in enumerate(full):
+            ply = i + 1
+            move_no = (ply + 1) // 2
+            is_white = (ply % 2 == 1)
+
+            try:
+                san = b.san(mv)
+            except Exception:
+                san = mv.uci()
+
+            prefix = f"{move_no}. " if is_white else "... "
+            out.append(prefix + san)
+
+            # advance
+            if mv in b.legal_moves:
+                b.push(mv)
+            else:
+                break
+
+        return out
 
     # =========================================================
     # Practice/theory state
@@ -292,6 +316,11 @@ class ChessGame:
         self.practice_phase = "IN_THEORY" if self.has_book_moves(self.board) else "OUT_OF_THEORY"
 
     def compute_suggest_moves(self, *, max_moves: int = 2) -> list[SuggestMove]:
+        """
+        Suggestions are sourced from (in order):
+          1) Cloud (if enabled and available)
+          2) Book (polyglot)
+        """
         b = self.board
 
         # 1) Cloud
@@ -576,9 +605,16 @@ class ChessGame:
         self.update_practice_phase()
         return True
 
-    def choose_ai_move(self, *, level: int, engine, randomness: float = 0.25, board: chess.Board | None = None):
+    def choose_forced_or_book_move(
+        self,
+        *,
+        randomness: float = 0.25,
+        board: chess.Board | None = None,
+    ):
         """
-        Returns (move, source) where source is 'forced'|'book'|'engine'|None.
+        Returns (move, source) for non-engine choices, or (None, None) if engine is required.
+
+        source: "forced" | "book" | None
         """
         b = board or self.board
 
@@ -595,10 +631,6 @@ class ChessGame:
             if random.random() < randomness:
                 return random.choice(entries).move, "book"
             return entries[0].move, "book"
-
-        mv = engine.choose_move(b, level=level) if engine else None
-        if mv is not None and mv != chess.Move.null():
-            return mv, "engine"
 
         return None, None
 
@@ -784,3 +816,4 @@ class ChessGame:
             return "Cloud: ..."
 
         return self._cloud_eval_hud_text(self.board)
+
