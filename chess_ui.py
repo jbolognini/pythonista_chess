@@ -171,151 +171,192 @@ class EvalBarView:
     - Uses normalized value in [-1..+1] where +1 = White winning.
     - Renders as a full-height bar with a white/black split that moves with eval.
     - Animates smoothly toward target (no blocking, no actions required).
+    - When pending, adds a subtle animated overlay (pulse + scan line).
     """
-
-    def __init__(self, scene, *, z: int = 140):
+    
+    def __init__(self, scene, z: int = 140):
         self.scene = scene
         self.z = int(z)
 
         # Geometry
-        self._x = 0.0
-        self._y = 0.0
-        self._w = 12.0
-        self._h = 100.0
+        self.x = 0.0
+        self.y = 0.0
+        self.w = 12.0
+        self.h = 200.0
 
         # State
-        self._value = 0.0          # current norm [-1..1]
-        self._target = 0.0         # target norm
-        self._pending = False      # optional visual
+        self._pending = False
+        self._t = 0.0  # animation time
+        self._norm = 0.0  # current normalized eval [-1..+1]
+        self._target_norm = 0.0 # target normalized eval [-1..+1]
 
-        # Nodes (simple: background + fill)
+        # --- Nodes ---
+        # Border / background
         self._bg = ShapeNode()
         self._bg.z_position = self.z
-        self._bg.stroke_color = (0, 0, 0, 0)
-        self._bg.line_width = 0
+        self._bg.fill_color = (0, 0, 0, 0.25)
+        self._bg.stroke_color = (0, 0, 0, 0.35)
+        self._bg.line_width = 1
         self._bg.anchor_point = (0, 0)
         scene.add_child(self._bg)
 
-        self._fill = ShapeNode()
-        self._fill.z_position = self.z + 1
-        self._fill.stroke_color = (0, 0, 0, 0)
-        self._fill.line_width = 0
-        self._fill.anchor_point = (0, 0)
-        scene.add_child(self._fill)
+        # Fill: white part (top)
+        self._fill_white = ShapeNode()
+        self._fill_white.z_position = self.z + 1
+        self._fill_white.fill_color = (1, 1, 1, 0.85)
+        self._fill_white.stroke_color = (0, 0, 0, 0)
+        self._fill_white.line_width = 0
+        self._fill_white.anchor_point = (0, 0)
+        scene.add_child(self._fill_white)
 
-        # A thin midline at "0.0" (optional)
-        self._mid = ShapeNode()
-        self._mid.z_position = self.z + 2
-        self._mid.stroke_color = (0, 0, 0, 0.25)
-        self._mid.fill_color = (0, 0, 0, 0)
-        self._mid.line_width = 1
-        self._mid.anchor_point = (0, 0)
-        scene.add_child(self._mid)
+        # Fill: black part (bottom)
+        self._fill_black = ShapeNode()
+        self._fill_black.z_position = self.z + 1
+        self._fill_black.fill_color = (0, 0, 0, 0.85)
+        self._fill_black.stroke_color = (0, 0, 0, 0)
+        self._fill_black.line_width = 0
+        self._fill_black.anchor_point = (0, 0)
+        scene.add_child(self._fill_black)
 
-        self.set_pending(True)  # until first eval arrives
+        # Pending overlay: pulse layer
+        self._pending_pulse = ShapeNode()
+        self._pending_pulse.z_position = self.z + 2
+        self._pending_pulse.fill_color = (1, 1, 1, 1.0)  # alpha animated
+        self._pending_pulse.stroke_color = (0, 0, 0, 0)
+        self._pending_pulse.line_width = 0
+        self._pending_pulse.anchor_point = (0, 0)
+        self._pending_pulse.alpha = 0.0
+        scene.add_child(self._pending_pulse)
+
+        # Pending overlay: scan line
+        self._scan = ShapeNode()
+        self._scan.z_position = self.z + 3
+        self._scan.fill_color = (1, 1, 1, 1.0)
+        self._scan.stroke_color = (0, 0, 0, 0)
+        self._scan.line_width = 0
+        self._scan.anchor_point = (0, 0)
+        self._scan.alpha = 0.0
+        scene.add_child(self._scan)
 
     # ----------------------------
     # Public API
     # ----------------------------
+    def layout_from_board(self, board_view, *, margin: float = 10.0, width: float = 14.0):
+        """
+        Called from scene.redraw_all() after board geometry is computed.
+        Places bar to the left of the board.
+        """
+        ox, oy = board_view.origin
+        s = board_view.square_size
+        board_h = 8 * s
+
+        self.w = float(width)
+        self.h = float(board_h)
+        self.x = float(ox - margin - self.w)
+        self.y = float(oy)
+
+        self._rebuild_static_paths()
+        self._rebuild_fill_paths()  # apply current norm to geometry
+
     def set_pending(self, pending: bool) -> None:
         self._pending = bool(pending)
-        # Simple pending look: slightly dim the fill
-        self._bg.alpha = 1.0
-        self._fill.alpha = 0.65 if self._pending else 1.0
+        if not self._pending:
+            self._pending_pulse.alpha = 0.0
+            self._scan.alpha = 0.0
 
-    def set_target(self, norm: float) -> None:
-        # clamp
-        try:
-            n = float(norm)
-        except Exception:
-            n = 0.0
+    def set_target_from_cp(self, cp: int, *, tanh_scale_cp: float = 400.0) -> None:
+        # Normalize to [-1..+1] using tanh
+        n = math.tanh(float(cp) / float(tanh_scale_cp))
+        # Clamp for safety
         if n > 1.0:
             n = 1.0
         elif n < -1.0:
             n = -1.0
-        self._target = n
+        self._target_norm = float(n)
 
-    def set_target_from_cp(self, cp: int, *, tanh_scale_cp: float = 400.0) -> None:
-        # same normalization you already use
-        n = math.tanh(float(cp) / float(tanh_scale_cp))
-        self.set_target(n)
-
-    def layout_from_board(self, board_view, *, margin: float = 10.0, width: float = 14.0) -> None:
+    def step(self, dt: float = 1.0 / 60.0) -> None:
         """
-        Place the bar to the LEFT of the board, vertically aligned to board.
+        Called from scene.update(). Drives both fill animation and pending effects.
         """
-        s = float(board_view.square_size)
-        ox, oy = board_view.origin
 
-        self._h = 8.0 * s
-        self._w = float(width)
+        self._t += dt
 
-        self._x = float(ox) - float(margin) - self._w
-        self._y = float(oy)
+        # ---- Fill animation (critically damped-ish simple approach) ----
+        # Smoothly move current norm toward target norm.
+        # speed: higher = snappier
+        speed = 8.0
+        a = 1.0 - math.exp(-speed * dt) if dt > 0 else 1.0
+        self._norm = (1.0 - a) * self._norm + a * self._target_norm
 
-        # Update static paths/positions
-        self._bg.position = (self._x, self._y)
-        self._bg.path = ui.Path.rect(0, 0, self._w, self._h)
-        self._bg.fill_color = (0.15, 0.15, 0.15)  # frame
+        self._rebuild_fill_paths()
 
-        self._mid.position = (self._x, self._y)
-        mid_y = self._h * 0.5
-        p = ui.Path()
-        p.move_to(0, mid_y)
-        p.line_to(self._w, mid_y)
-        self._mid.path = p
+        # ---- Pending overlay animation ----
+        if self._pending:
+            # Pulse: 0..1..0
+            pulse = 0.5 + 0.5 * math.sin(self._t * 5.5)
+            # keep subtle
+            self._pending_pulse.alpha = 0.10 + 0.20 * pulse
 
-        # Fill depends on value, so render now
-        self._render_fill()
+            # Scan line: bounce up/down
+            # y_frac in [0..1]
+            y_frac = 0.5 + 0.5 * math.sin(self._t * 3.0)
+            scan_h = max(6.0, self.h * 0.04)
+            y0 = self.y + y_frac * (self.h - scan_h)
 
-    def step(self, dt: float) -> None:
-        """
-        Call from Scene.update(dt).
-        Smoothly animates _value -> _target.
-        """
-        # If not laid out yet, nothing to do.
-        if self._h <= 0.0:
-            return
+            self._scan.alpha = 0.25
+            self._scan.position = (self.x, y0)
+            self._scan.path = ui.Path.rect(0, 0, self.w, scan_h)
 
-        # Critically damped-ish exponential smoothing
-        # Larger k = snappier.
-        k = 10.0
-        a = 1.0 - math.exp(-k * max(0.0, float(dt)))
-        self._value = (1.0 - a) * self._value + a * self._target
-
-        self._render_fill()
+            # keep overlay sized even if not rebuilt
+            self._pending_pulse.position = (self.x, self.y)
+        else:
+            self._pending_pulse.alpha = 0.0
+            self._scan.alpha = 0.0
 
     # ----------------------------
-    # Rendering
+    # Internals
     # ----------------------------
-    def _render_fill(self) -> None:
+    def _rebuild_static_paths(self):
+        self._bg.position = (self.x, self.y)
+        self._bg.path = ui.Path.rect(0, 0, self.w, self.h)
+
+        self._pending_pulse.position = (self.x, self.y)
+        self._pending_pulse.path = ui.Path.rect(0, 0, self.w, self.h)
+
+        # Scan gets positioned in step()
+
+    def _rebuild_fill_paths(self):
         """
-        Fill indicates eval:
-          - White area from split -> top
-          - Black area from bottom -> split
-        split is mapped by (value+1)/2.
+        Convert norm [-1..+1] to a split point inside the bar:
+          -1 => all black
+           0 => 50/50
+          +1 => all white
         """
-        # Convert [-1..1] -> [0..1] where 0 = black winning, 1 = white winning
-        t = (self._value + 1.0) * 0.5
-        if t < 0.0:
-            t = 0.0
-        elif t > 1.0:
-            t = 1.0
+        white_frac = 0.5 + 0.5 * float(self._norm)
+        white_frac = max(0.0, min(1.0, white_frac))
+    
+        white_h = self.h * white_frac
+        black_h = self.h - white_h
+    
+        flipped = bool(getattr(self.scene.board_view, "flipped", False))
 
-        split_y = self._h * t
-
-        # We draw a single "fill" node as the WHITE region, and let bg read as dark.
-        # (Looks like a chess eval bar: dark base + white cap.)
-        self._fill.position = (self._x, self._y)
-        self._fill.path = ui.Path.rect(0, split_y, self._w, self._h - split_y)
-
-        # White cap
-        self._fill.fill_color = (0.92, 0.92, 0.92)  # white-ish
-
-        # Make the background more black-ish
-        self._bg.fill_color = (0.08, 0.08, 0.08)
-
-
+        if not flipped:
+            # Black bottom
+            self._fill_black.position = (self.x, self.y)
+            self._fill_black.path = ui.Path.rect(0, 0, self.w, black_h)
+    
+            # White top
+            self._fill_white.position = (self.x, self.y + black_h)
+            self._fill_white.path = ui.Path.rect(0, 0, self.w, white_h)
+        else:
+            # White bottom
+            self._fill_white.position = (self.x, self.y)
+            self._fill_white.path = ui.Path.rect(0, 0, self.w, white_h)
+    
+            # Black top
+            self._fill_black.position = (self.x, self.y + white_h)
+            self._fill_black.path = ui.Path.rect(0, 0, self.w, black_h)
+            
 class BoardRenderer:
     """Board geometry + square nodes + piece sprites + move marks and overlays."""
 

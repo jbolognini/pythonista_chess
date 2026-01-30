@@ -109,7 +109,7 @@ class SunfishEngine:
     TT_CLEAR_EVERY_N_SEARCHES = 12  # periodic TT clear to avoid unbounded dict churn
     TIME_CHECK_MASK = 0x3FF      # check clock every 1024 nodes
     YIELD_MASK = 0xFFF          # yield every 4096 nodes
-    YIELD_SLEEP_S = 0.0005      # real yield (0.5ms). Increase if you want "more bulletproof"
+    YIELD_SLEEP_S = 0.001      # real yield (0.5ms). Increase if you want "more bulletproof"
 
     def __init__(self, seed=None):
         self.rng = random.Random(seed)

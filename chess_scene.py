@@ -15,10 +15,10 @@ from lichess_engine import LichessCloudEngine
 
 REVIEW_OVERLAY_ALPHA = 0.20
 
-# Eval normalization (print now; later drives eval bar animation)
-EVAL_TANH_SCALE_CP = 400.0   # bigger = bar moves less
-EVAL_CLAMP_CP = 2000         # clamp to avoid insane swings
-
+# Eval normalization
+EVAL_TANH_SCALE_CP = 400.0  # bigger = bar moves less
+EVAL_CLAMP_CP = 2000 # clamp to avoid insane swings
+EVAL_BAR_STEP = 1.0 / 60.0
 
 class ChessScene(Scene):
     """
@@ -133,10 +133,8 @@ class ChessScene(Scene):
             return
         self.redraw_all()
     
-    def update(self, dt=None):
-        if not dt:
-            dt = 1.0 / 60.0
-        self.eval_bar.step(dt)
+    def update(self):
+        self.eval_bar.step(EVAL_BAR_STEP)
     
     def redraw_all(self):
         self.board_view.compute_geometry()
