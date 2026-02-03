@@ -160,7 +160,7 @@ class ChessGame:
         if opening_choice and (not self.board_is_fresh()):
             return False
         self.opening_choice = opening_choice
-        self.opening_title = self.opening_title_for(opening_choice)
+        self.opening_title = practice_opening_title(opening_choice)
         self._theory_started = False
         self._practice_lib = None
         self._practice_notes = {}
@@ -180,9 +180,6 @@ class ChessGame:
 
     def set_cloud_eval(self, enabled: bool) -> None:
         self.cloud_eval_enabled = bool(enabled)
-
-    def opening_title_for(self, opening_key: str | None) -> str | None:
-        return practice_opening_title(opening_key) if opening_key else None
 
     @staticmethod
     def opening_options():
