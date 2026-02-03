@@ -153,6 +153,8 @@ class SettingsView(ui.View):
         level = self._level_int()
         opening_choice = self._opening_choice
         practice_tier = "master" if self.seg_tier.selected_index == 1 else "beginner"
+        show_arrows = bool(self._show_suggestion_arrows)
+        cloud_eval = bool(self._cloud_eval_enabled)
 
         if callable(self.on_done):
             self.on_done(
@@ -161,8 +163,8 @@ class SettingsView(ui.View):
                 level,
                 opening_choice,
                 practice_tier,
-                bool(self._show_suggestion_arrows),
-                bool(self._cloud_eval_enabled),
+                show_arrows,
+                cloud_eval
             )
         self.close()
 
