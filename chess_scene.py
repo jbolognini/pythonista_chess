@@ -51,9 +51,11 @@ class ChessScene(Scene):
         # HUD state
         self._ai_thinking = False
 
-        # Eval bar state (future)
+        # Eval bar state
         self.eval_white_cp = None
         self.eval_norm = None
+        self._pending_eval_result = None
+        self._pending_ai_result = None
 
         # Local engine generations (stale protection)
         self._ai_gen = 0
@@ -69,10 +71,11 @@ class ChessScene(Scene):
         self._review_entry_ply = None
         self._review_entry_selected = None
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Scene lifecycle
-    # --------------------------------------------------
+    # -----------------------------------------------
     def setup(self):
+        self._last_eval_request_fen = None
         # ----- Engines -----
         self._cloud_engine = LichessCloudEngine()
 
@@ -125,17 +128,29 @@ class ChessScene(Scene):
 
         self._ai_thinking = False
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Layout / drawing
-    # --------------------------------------------------
+    # -----------------------------------------------
     def did_change_size(self):
         if not self.ready:
             return
         self.redraw_all()
     
     def update(self):
-        self.eval_bar.step(EVAL_BAR_STEP)
+        # --- Apply eval result ---
+        if self._pending_eval_result:
+            gen, fen, white_cp = self._pending_eval_result
+            self._pending_eval_result = None
+            self._apply_eval_result(gen, fen, white_cp)
     
+        # --- Apply AI result ---
+        if self._pending_ai_result:
+            gen, fen, move, white_cp = self._pending_ai_result
+            self._pending_ai_result = None
+            self._apply_ai_result(gen, fen, move, white_cp)
+    
+        self.eval_bar.step(EVAL_BAR_STEP)
+        
     def redraw_all(self):
         self.board_view.compute_geometry()
         self.board_view.draw_squares()
@@ -215,9 +230,9 @@ class ChessScene(Scene):
 
         self.refresh_hud()
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Settings
-    # --------------------------------------------------
+    # -----------------------------------------------
     def apply_settings(
         self,
         *,
@@ -243,11 +258,26 @@ class ChessScene(Scene):
         self.redraw_all()
         self._on_position_changed(reason="settings", allow_ai=True)
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Local eval (EngineService)
-    # --------------------------------------------------
+    # -----------------------------------------------
     def _request_engine_eval(self):
+        '''
+        fen = self.game.board.fen()
+        if self._last_eval_request_fen == fen:
+            print("DUPE eval blocked for same FEN")
+            return
+        self._last_eval_request_fen = fen
+        '''
         if not self.engine_service:
+            return
+
+        # Suppress eval if AI is enabled and it's AI's turn
+        if (
+            self.game.vs_ai
+            and not self.review_mode
+            and self.game.board.turn == self.game.ai_color
+        ):
             return
     
         fen = self.game.board.fen()
@@ -262,8 +292,12 @@ class ChessScene(Scene):
             level=level,
             gen=gen,
         )
-        
-    def _on_eval_result(self, *, fen: str, white_cp: int, gen: int):
+
+    def _apply_eval_result(
+        self, gen: int, 
+        fen: str, 
+        white_cp: int,
+    ):
         if int(gen) != int(self._eval_gen):
             return
         if fen != self.game.board.fen():
@@ -279,9 +313,13 @@ class ChessScene(Scene):
             tanh_scale_cp=EVAL_TANH_SCALE_CP,
         )
         
-    # --------------------------------------------------
+    def _on_eval_result(self, *, fen: str, white_cp: int, gen: int):
+        # Callback from engine servuce, DATA ONLY — no UI mutation
+        self._pending_eval_result = (gen, fen, white_cp)
+            
+    # -----------------------------------------------
     # AI scheduling (EngineService)
-    # --------------------------------------------------
+    # -----------------------------------------------
     def _schedule_ai_if_needed(self):
         if not self.engine_service:
             return
@@ -307,11 +345,16 @@ class ChessScene(Scene):
             self._ai_thinking = False
             self.refresh_hud()
             print("[AI]", traceback.format_exc())
-
-    def _on_ai_result(self, *, gen: int, fen: str, move: chess.Move | None, white_cp: int | None = None, **_kw):
-        # Clear thinking regardless; then ignore stale
+            
+    def _apply_ai_result(
+        self,
+        gen: int,
+        fen: str,
+        move: chess.Move | None,
+        white_cp: int | None,
+    ):
         self._ai_thinking = False
-
+    
         if self.review_mode:
             self.refresh_hud()
             return
@@ -321,11 +364,22 @@ class ChessScene(Scene):
         if fen != self.game.board.fen():
             self.refresh_hud()
             return
-
+    
         if move and self.game.apply_ai_move(move):
             self._on_position_changed(reason="ai_move", allow_ai=True)
         else:
             self.refresh_hud()
+
+    def _on_ai_result(
+        self,
+        *,
+        gen: int,
+        fen: str,
+        move: chess.Move | None,
+        white_cp: int | None = None,
+    ):
+        # Callback from engine servuce, DATA ONLY — no UI mutation
+        self._pending_ai_result = (gen, fen, move, white_cp)
 
     # -----------------------------------------------
     # Review / history navigation mode
@@ -464,9 +518,9 @@ class ChessScene(Scene):
         self.game.cloud_eval_pending = True
         self.game.suggested_moves = []
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Game lifecycle
-    # --------------------------------------------------
+    # -----------------------------------------------
     def reset(self):
         if not self.ready:
             return
@@ -499,9 +553,9 @@ class ChessScene(Scene):
         self._on_position_changed(reason="jump", allow_ai=True)
         return True
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Promotion
-    # --------------------------------------------------
+    # -----------------------------------------------
     def _clear_promotion_ui(self):
         self._promo_active = False
         self._promo_from = None
@@ -525,9 +579,9 @@ class ChessScene(Scene):
         if self.game.make_human_move(mv):
             self._on_position_changed(reason="promotion", allow_ai=True)
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Input
-    # --------------------------------------------------
+    # -----------------------------------------------
     def touch_ended(self, touch):
         if not self.ready:
             return
@@ -598,9 +652,9 @@ class ChessScene(Scene):
         self.board_view.refresh_overlays(self.game.board, self.selected)
         self.refresh_hud()
 
-    # --------------------------------------------------
+    # -----------------------------------------------
     # Import / Export
-    # --------------------------------------------------
+    # -----------------------------------------------
     def import_text(self, text):
         ok, msg = self.game.import_pgn_or_fen(text)
         if not ok:
