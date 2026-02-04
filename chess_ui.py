@@ -278,7 +278,6 @@ class EvalBarView:
         """
         Called from scene.update(). Drives both fill animation and pending effects.
         """
-
         self._t += dt
 
         # ---- Fill animation (critically damped-ish simple approach) ----
@@ -331,6 +330,10 @@ class EvalBarView:
           -1 => all black
            0 => 50/50
           +1 => all white
+    
+        Orientation:
+          - If board is NOT flipped (White on bottom), put White fill at the bottom.
+          - If board IS flipped (Black on bottom), put Black fill at the bottom.
         """
         white_frac = 0.5 + 0.5 * float(self._norm)
         white_frac = max(0.0, min(1.0, white_frac))
@@ -339,24 +342,24 @@ class EvalBarView:
         black_h = self.h - white_h
     
         flipped = bool(getattr(self.scene.board_view, "flipped", False))
-
-        if not flipped:
-            # Black bottom
-            self._fill_black.position = (self.x, self.y)
-            self._fill_black.path = ui.Path.rect(0, 0, self.w, black_h)
     
-            # White top
-            self._fill_white.position = (self.x, self.y + black_h)
-            self._fill_white.path = ui.Path.rect(0, 0, self.w, white_h)
-        else:
-            # White bottom
+        if not flipped:
+            # White bottom (White pieces on bottom)
             self._fill_white.position = (self.x, self.y)
             self._fill_white.path = ui.Path.rect(0, 0, self.w, white_h)
     
             # Black top
             self._fill_black.position = (self.x, self.y + white_h)
             self._fill_black.path = ui.Path.rect(0, 0, self.w, black_h)
-            
+        else:
+            # Black bottom (Black pieces on bottom)
+            self._fill_black.position = (self.x, self.y)
+            self._fill_black.path = ui.Path.rect(0, 0, self.w, black_h)
+    
+            # White top
+            self._fill_white.position = (self.x, self.y + black_h)
+            self._fill_white.path = ui.Path.rect(0, 0, self.w, white_h)
+                    
 class BoardRenderer:
     """Board geometry + square nodes + piece sprites + move marks and overlays."""
 
@@ -404,7 +407,6 @@ class BoardRenderer:
             self._arrow_nodes.append((shaft, head))
 
     # ---- geometry ----
-
     def compute_geometry(self):
         w, h = self.scene.size.w, self.scene.size.h
         board_px = min(w, h) * 0.92
