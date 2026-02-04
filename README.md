@@ -1,4 +1,4 @@
-# Chess Practice App — Progress & Design Notes
+# Chess Practice App — Progress & Design Notes (v3)
 
 ## High-Level Overview
 
@@ -21,66 +21,78 @@ The core goal is not just to memorize moves, but to build understanding of:
 
 ### Centralization + Separation of Responsibilities
 
-The code is organized around a **single source of truth** for chess rules, practice enforcement, and “what the UI should say”:
+The code is organized around a single source of truth for chess rules, practice enforcement, and UI-facing state.
 
 **Game logic (`ChessGame`)**
 - Owns the authoritative `chess.Board`
-- Owns opening selection + practice model compilation + expected-move enforcement
+- Owns opening selection, practice model compilation, and expected-move enforcement
 - Owns theory/book lookup helpers
 - Owns move application methods (human/AI), undo/redo stacks, import/export
-- Produces HUD strings (row 1–4) so UI can stay dumb
+- Produces HUD strings (row 1–4)
 
 **Scene orchestration (`ChessScene`)**
-- Owns rendering objects (board, HUD, promotion overlay)
-- Owns threading and “background work” lifecycle:
+- Owns rendering objects (board, HUD, promotion overlay, evaluation bar)
+- Owns background work lifecycle:
   - AI move worker
-  - cloud eval request scheduling
-- Owns *state transitions* after position changes (refresh overlays, clear selection, queue evaluations, etc.)
-- Calls into `ChessGame` for all chess/training decisions
+  - local engine evaluation
+  - cloud eval scheduling
+- Owns state transitions after position changes (refresh overlays, clear selection, queue work)
+- Calls into `ChessGame` for all chess and training decisions
 
 **UIKit / views (`game_view.py`)**
-- Owns top bar + settings/import/export sheets
-- Treats the Scene as the interactive “game surface”
-- Reads only safe, public state via scene/game methods (not internals)
+- Owns top bar and modal sheets (settings, import/export)
+- Treats the scene as the interactive game surface
+- Reads only public state via scene/game methods
 
 **Rendering (`chess_ui.py`)**
-- Owns geometry and drawing (squares, pieces, legal marks, suggestion arrows)
-- No chess/training decisions; it renders whatever `ChessGame` and `ChessScene` decide
+- Owns geometry and drawing (squares, pieces, legal marks, suggestion arrows, evaluation bar)
+- Contains no chess or training logic
 
 ---
 
 ## Current Feature Set
 
 ### Play & Interaction
-- Tap-to-select + tap-to-move
+- Tap-to-select and tap-to-move
 - Legal move dots and capture rings
-- Board flip (play as White/Black perspective)
-- Undo / redo / reset
+- Board flip (play from White or Black perspective)
+- Undo, redo, and reset
 - Import PGN or FEN; export PGN or FEN
+
+### Move Navigation
+- Move list / notation panel
+- Clickable navigation to any move
+- Step backward and forward through moves
+- Jump directly to the start or end of the game
 
 ### Promotion
 - Underpromotion chooser (Q/R/B/N) shown only when required
-- Move is only committed after selecting a promotion piece
+- Move is committed only after selecting a promotion piece
 
 ### AI (Sunfish)
-- Local AI opponent powered by a more robust Sunfish engine
-- Adjustable difficulty (1–5)
+- Local AI opponent powered by a Sunfish-derived engine
+- Adjustable difficulty levels (1–5)
 - AI can play either side
 
-### Opening book + “theory”
-- Polyglot book support for non-practice play (“in theory / out of book”)
-- Book randomness control (weighted-ish selection)
+### Evaluation
+- Vertical evaluation bar indicating side advantage
+- Evaluation updates as positions change and reflects board orientation
 
-### Cloud guidance (Lichess)
+### Opening Book + “Theory”
+- Polyglot book support for non-practice play
+- In-theory vs out-of-book detection
+- Weighted randomness for book move selection
+
+### Cloud Guidance (Lichess)
 - Optional Lichess cloud evaluation
-- Multi-PV display in HUD
-- Suggestion arrows can be driven by:
+- Multi-PV display in the HUD
+- Suggestion arrows driven by:
   - cloud PVs (when enabled and available)
-  - local book moves (fallback / when cloud disabled)
+  - local book moves (fallback)
 
-### Suggestion arrows
-- Up to two arrows rendered with relative weighting (best vs second-best)
-- Arrow colors encode the source (cloud/book/engine)
+### Suggestion Arrows
+- Up to two arrows rendered with relative weighting
+- Arrow colors encode the source (cloud, book, engine)
 - Centralized suggestion generation in `ChessGame.compute_suggest_moves()`
 
 ---
@@ -91,7 +103,7 @@ The code is organized around a **single source of truth** for chess rules, pract
 
 When an opening is selected, the game enters practice mode, which provides:
 
-- guidance from move 0 (including the very first move)
+- guidance from move 0 (including the first move)
 - structured opening lines
 - controlled branching
 - instructional notes explaining why moves are played
@@ -100,23 +112,18 @@ Practice is opening-specific and tiered (e.g. beginner vs master).
 
 ### Practice Data Model
 
-Openings are defined using a line-based model, not a hand-authored move tree.
+Openings are defined using a line-based model rather than a hand-authored move tree.
 
 Each opening contains:
 - a human-readable title
-- one or more tiers (currently beginner + master)
+- one or more tiers
 - each tier is a list of training items
 
 Each training item contains:
 - a unique ID
 - tags (solid, trap, punishment, etc.)
 - a full SAN move sequence
-- per-move instructional notes explaining intent or punishment
-
-This format is:
-- easy to author
-- easy to expand incrementally
-- easy to reason about during debugging
+- per-move instructional notes
 
 Lines are compiled at runtime into a position-key → expected-moves map.
 
@@ -127,133 +134,117 @@ The game tracks a conceptual practice phase:
 - FREE — no opening selected
 - READY — opening selected, guidance available
 - IN THEORY — past practice model but still in book
-- OUT OF THEORY — no known continuation (engine play)
+- OUT OF THEORY — no known continuation
 
 The phase influences:
 - whether guidance is shown
-- whether cloud eval is requested
+- whether cloud evaluation is requested
 - what the HUD displays
 
 ### Intended Training Behavior
 
-#### Correct Move
+**Correct Move**
 - The move is applied
-- Training continues
-- No feedback is shown
+- Training continues without feedback
 
-#### Incorrect Move (Current Behavior)
-- If the current position is covered by the practice model, unexpected (but legal) moves are **blocked**
-- A short “miss” note is latched for the HUD so the user can retry immediately
-- The board remains unchanged
-
-This mirrors how humans learn best:
-mistake → explanation → correction → repetition
+**Incorrect Move**
+- Unexpected (but legal) moves covered by the practice model are blocked
+- A short feedback note is latched in the HUD
+- The board remains unchanged, allowing immediate retry
 
 ---
 
-## Current State (What Works)
+## Current State
 
-- Opening practice infrastructure exists
+- Opening practice infrastructure is in place
 - Practice lines compile correctly
-- Expected moves can be detected per position
-- Instructional notes are stored per move
-- Practice enforcement can block incorrect moves (when the practice model applies)
-- HUD can display expected moves (when hints are on or after a miss)
-- AI integrates with practice openings (forced replies when applicable)
-- Cloud eval + local book feed suggestion arrows
-- Import/export and standard play loop are stable
+- Expected moves are detected per position
+- Instructional notes are stored and displayed per move
+- Practice enforcement blocks incorrect moves when applicable
+- AI integrates with practice openings (forced replies when required)
+- Cloud eval and local book suggestions feed the HUD and arrows
+- Import/export and the standard play loop are stable
 
 ---
 
-## Current Gaps / What Is Incomplete
+## Current Gaps
 
 ### Opening Trainers
-- The opening trainer content is still incomplete / under active authoring
+- Opening content is still under active authoring
 - Coverage depth varies by opening and tier
-- Some “punish common mistakes” lines still need to be filled out and validated
+- Some punishment lines require further validation
 
 ---
 
-## Future Ideas (User-Owned)
+## Future Ideas
 
+### User-Owned Enhancements
 - Board editor
 - Time controls
 - AI personality
-- Permanent settings stored to a JSON state file
+- Persistent settings stored locally
 
-## Additional Standard Chess App Features (Not Yet Implemented)
-
-- Move list / notation panel with clickable navigation
-- Step backward / forward through moves
-- Jump to start / end of game
+### Additional Chess App Features
+- Captured material display using micro piece icons above and below the board
 - Analysis mode for exploring variations without affecting the main game
-- Evaluation bar showing side advantage
 - Post-game summary (opening reached, theory exit point, major mistakes)
-- Move quality labels (inaccuracy / mistake / blunder)
-- Per-opening progress tracking and completion stats
+- Move quality labels (inaccuracy, mistake, blunder)
+- Per-opening progress tracking
 - Board color themes and highlight customization
 - Multiple piece sets
 - Optional sound effects and haptic feedback
-- Local save / load of games and sessions
+- Local save/load of games and sessions
 - Annotated PGN export with instructional comments
-- Quick copy / paste of FEN and PGN
+- Quick copy/paste of FEN and PGN
 - Automatic board flip based on side to move
 - Non-clocked time tracking per side
 - Optional threat or attacked-piece highlighting
 
 ---
 
-## Module Map (Current Files)
+## Module Map
 
 ### app.py
-- App entry point / presentation glue
-- Creates the main UI view and presents it
+- Application entry point
+- Creates and presents the main UI view
 
 ### game_view.py
-- Top-level UIKit UI: toolbar + modal sheets
-- Settings sheet (vs AI, AI side/level, opening practice selection, tier, arrows, cloud)
-- Import PGN/FEN sheet and export PGN/FEN sheet
-- Owns enabling/disabling toolbar buttons based on scene/game state
+- Top-level UIKit UI (toolbar + modal sheets)
+- Settings sheet (AI options, opening selection, tier, arrows, cloud)
+- Import/export sheets
+- Enables and disables toolbar actions based on state
 
 ### chess_scene.py
-- The orchestrator for gameplay:
-  - constructs `ChessGame`, engines, and renderers
-  - owns AI worker loop + cloud eval scheduling
-  - owns centralized “after move / after position changed” state transitions
-  - owns promotion flow (show chooser, commit on selection)
-- Keeps UI responsive by doing AI/cloud work off the main thread
+- Gameplay orchestrator
+- Constructs `ChessGame`, engines, and renderers
+- Owns AI and evaluation scheduling
+- Handles promotion flow and position-change transitions
 
 ### chess_game.py
-- Core rules + training model:
-  - authoritative board state
-  - practice model compilation, enforcement, feedback strings
-  - book lookup helpers and suggestion generation
-  - undo/redo, reset, import/export
-  - centralized HUD row text generators
+- Core chess and training logic
+- Board state, practice enforcement, book helpers
+- Undo/redo, reset, import/export
+- Centralized HUD text generation
 
 ### chess_ui.py
-- Rendering / drawing primitives:
-  - board layout + square nodes
-  - piece sprite syncing
-  - legal move marks (dots/rings)
-  - suggestion arrows (up to two) drawn from `game.suggested_moves`
-  - promotion overlay UI (Q/R/B/N)
+- Rendering and drawing primitives
+- Board layout, piece sprites, overlays
+- Suggestion arrows and evaluation bar
+- Promotion overlay UI
 
 ### sunfish_engine.py
-- Local AI engine (Sunfish-derived)
-- Handles search/evaluation and difficulty scaling
+- Local AI engine implementation
+- Search, evaluation, and difficulty scaling
 
 ### lichess_engine.py
-- Cloud evaluation integration (Lichess cloud analysis)
-- Returns multi-PV results used for HUD text + suggestion arrows
-- Includes local caching to avoid repeated network calls for the same position
+- Lichess cloud evaluation integration
+- Multi-PV result handling
+- Lightweight caching to avoid repeated requests
 
 ### opening_book.py
-- Local opening-book helper (Polyglot)
-- Lightweight caching layer for book lookups to reduce repeated disk reads
-- Used as a fast “theory” fallback when cloud is disabled/unavailable
+- Polyglot opening book helper
+- Cached book lookups for fast theory checks
 
 ### openings.py
-- Opening library + practice line definitions
-- Functions to list openings, titles, and tiered practice items
-- Stores the training content (SAN lines + notes)
+- Opening library and practice definitions
+- Tiered SAN lines with instructional notes
