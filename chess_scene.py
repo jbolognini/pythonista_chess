@@ -223,7 +223,6 @@ class ChessScene(Scene):
         # Always request local eval (non-blocking)
         self._request_engine_eval()
 
-        # AI (optional)
         # AI
         if allow_ai and not self.review_mode:
             self._schedule_ai_if_needed()
@@ -325,8 +324,6 @@ class ChessScene(Scene):
             return
         if not self.game.vs_ai:
             return
-
-        b = self.game.board
         
         g = self.game
         b = g.board
