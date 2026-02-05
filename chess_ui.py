@@ -221,7 +221,7 @@ class EvalBarView:
         # Pending overlay: pulse layer
         self._pending_pulse = ShapeNode()
         self._pending_pulse.z_position = self.z + 2
-        self._pending_pulse.fill_color = (1, 1, 1, 1.0)  # alpha animated
+        self._pending_pulse.fill_color = (0.25, 0.25, 0.25, 1)  # alpha animated
         self._pending_pulse.stroke_color = (0, 0, 0, 0)
         self._pending_pulse.line_width = 0
         self._pending_pulse.anchor_point = (0, 0)
@@ -231,7 +231,7 @@ class EvalBarView:
         # Pending overlay: scan line
         self._scan = ShapeNode()
         self._scan.z_position = self.z + 3
-        self._scan.fill_color = (1, 1, 1, 1.0)
+        self._scan.fill_color = (0.5, 0.5, 0.5, 1.0)
         self._scan.stroke_color = (0, 0, 0, 0)
         self._scan.line_width = 0
         self._scan.anchor_point = (0, 0)
@@ -241,7 +241,7 @@ class EvalBarView:
     # ----------------------------
     # Public API
     # ----------------------------
-    def layout_from_board(self, board_view, *, margin: float = 10.0, width: float = 14.0):
+    def layout_from_board(self, board_view, *, margin: float = 5.0, width: float = 10.0):
         """
         Called from scene.redraw_all() after board geometry is computed.
         Places bar to the left of the board.
@@ -302,7 +302,7 @@ class EvalBarView:
             scan_h = max(6.0, self.h * 0.04)
             y0 = self.y + y_frac * (self.h - scan_h)
 
-            self._scan.alpha = 0.25
+            self._scan.alpha = 0.50
             self._scan.position = (self.x, y0)
             self._scan.path = ui.Path.rect(0, 0, self.w, scan_h)
 

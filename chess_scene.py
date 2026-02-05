@@ -155,6 +155,7 @@ class ChessScene(Scene):
         self.board_view.compute_geometry()
         self.board_view.draw_squares()
         self.board_view.sync_pieces(self.game.board)
+        self.eval_bar.layout_from_board(self.board_view)
         self.board_view.refresh_overlays(self.game.board, self.selected)
 
         # Review overlay geometry
