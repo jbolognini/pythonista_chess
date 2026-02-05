@@ -13,9 +13,24 @@ PROMOTION_PIECES = (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
 MATE_CP = 200_000
 
 
-# ---------------------------------------------------------
+# ---------------------------------------------------
+# Captured material (derived from current board state)
+# ---------------------------------------------------
+@dataclass(frozen=True)
+class CapturedMaterial:
+    """Missing pieces for each color, expressed as piece symbols.
+
+    - missing_black: lowercase symbols (pieces White has captured)
+    - missing_white: uppercase symbols (pieces Black has captured)
+    """
+
+    missing_white: list[str]  # e.g. ["Q","P","P"]  (White pieces missing from board)
+    missing_black: list[str]  # e.g. ["q","p","p"]  (Black pieces missing from board)
+
+
+# ---------------------------------------------------
 # Suggestion model (cloud/book)
-# ---------------------------------------------------------
+# ---------------------------------------------------
 @dataclass(frozen=True)
 class SuggestMove:
     uci: str
@@ -125,8 +140,61 @@ class ChessGame:
         return self.board.fen() == chess.Board().fen()
 
     # =========================================================
-    # Eval state (owned by game; computed elsewhere)
+    # Captured material (derived from current board state)
     # =========================================================
+    def captured_material(self) -> CapturedMaterial:
+        """Return missing pieces for each color based on current board state.
+
+        Computes from the current board only (supports FEN import, jump_to_ply, undo/redo).
+        Missing Black = pieces White has captured (lowercase).
+        Missing White = pieces Black has captured (uppercase).
+        """
+        start = {
+            chess.PAWN: 8,
+            chess.KNIGHT: 2,
+            chess.BISHOP: 2,
+            chess.ROOK: 2,
+            chess.QUEEN: 1,
+        }
+
+        cur_white = {pt: 0 for pt in start}
+        cur_black = {pt: 0 for pt in start}
+
+        for p in self.board.piece_map().values():
+            if p.piece_type == chess.KING:
+                continue
+            if p.color == chess.WHITE:
+                if p.piece_type in cur_white:
+                    cur_white[p.piece_type] += 1
+            else:
+                if p.piece_type in cur_black:
+                    cur_black[p.piece_type] += 1
+
+        missing_white_counts = {pt: max(0, start[pt] - cur_white[pt]) for pt in start}
+        missing_black_counts = {pt: max(0, start[pt] - cur_black[pt]) for pt in start}
+
+        # Order: Q, R, B, N, P (major pieces first, pawns last)
+        order = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT, chess.PAWN]
+
+        missing_white: list[str] = []
+        missing_black: list[str] = []
+
+        for pt in order:
+            c_w = missing_white_counts[pt]
+            if c_w:
+                sym_w = chess.Piece(pt, chess.WHITE).symbol()  # uppercase
+                missing_white.extend([sym_w] * c_w)
+
+            c_b = missing_black_counts[pt]
+            if c_b:
+                sym_b = chess.Piece(pt, chess.BLACK).symbol()  # lowercase
+                missing_black.extend([sym_b] * c_b)
+
+        return CapturedMaterial(missing_white=missing_white, missing_black=missing_black)
+
+    # ==============================================
+    # Eval state (owned by game; computed elsewhere)
+    # ==============================================
     def set_eval(self, *, white_cp: int | None, source: str | None, fen: str | None = None) -> None:
         """
         Store a local eval in centipawns from White perspective (+ = White better).

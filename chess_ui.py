@@ -374,6 +374,15 @@ class BoardRenderer:
         self.piece_nodes = {}            # sq -> SpriteNode
         self._mark_pool = []             # pooled ShapeNodes for dots/rings
 
+        # Captured material UI (micro piece sprites)
+        self._capt_top_nodes: list[SpriteNode] = []
+        self._capt_bottom_nodes: list[SpriteNode] = []
+        self._capt_max: int = 16
+        self._capt_scale: float = 0.35   # micro size relative to piece size
+        self._capt_pad: float = 2.0      # spacing in px-ish units
+        self._capt_label_white: LabelNode | None = None  # label for White's captures (missing_black)
+        self._capt_label_black: LabelNode | None = None  # label for Black's captures (missing_white)
+
         self.sq_light = (0.93, 0.93, 0.93, 1.0)
         self.sq_dark = (0.55, 0.55, 0.55, 1.0)
 
@@ -405,6 +414,8 @@ class BoardRenderer:
             scene.add_child(head)
 
             self._arrow_nodes.append((shaft, head))
+
+        self.init_captured_material_ui()
 
     # ---- geometry ----
     def compute_geometry(self):
@@ -446,6 +457,183 @@ class BoardRenderer:
 
     def toggle_flipped(self):
         self.set_flipped(not self.flipped)
+
+    # ---- captured material UI ----
+    def init_captured_material_ui(self) -> None:
+        """Create pooled SpriteNodes for captured-material strips (top/bottom)."""
+        if self._capt_top_nodes or self._capt_bottom_nodes:
+            return
+
+        # Placeholder texture; nodes start hidden
+        placeholder = self._tex[PIECE_SPRITES["P"]]
+
+        z = 60  # above marks/pieces, below HUD
+        for _ in range(self._capt_max):
+            n = SpriteNode(placeholder)
+            n.z_position = z
+            n.alpha = 0.0
+            self.scene.add_child(n)
+            self._capt_top_nodes.append(n)
+
+        for _ in range(self._capt_max):
+            n = SpriteNode(placeholder)
+            n.z_position = z
+            n.alpha = 0.0
+            self.scene.add_child(n)
+            self._capt_bottom_nodes.append(n)
+        
+        # Labels (hidden by default)
+        lw = LabelNode("")
+        lw.z_position = z + 1
+        lw.color = "white"
+        lw.alpha = 0.0
+        self.scene.add_child(lw)
+        self._capt_label_white = lw
+
+        lb = LabelNode("")
+        lb.z_position = z + 1
+        lb.color = "white"
+        lb.alpha = 0.0
+        self.scene.add_child(lb)
+        self._capt_label_black = lb
+
+    def _capt_material_value(self, syms: list[str]) -> int:
+        """Material value of a list of piece symbols (ignores kings)."""
+        v = 0
+        for s in syms:
+            t = s.lower()
+            if t == "p":
+                v += 1
+            elif t in ("n", "b"):
+                v += 3
+            elif t == "r":
+                v += 5
+            elif t == "q":
+                v += 9
+        return v
+
+    def refresh_captured_material(self, captured) -> None:
+        """Render captured material using micro piece sprites.
+
+        `captured` is a CapturedMaterial-like object with:
+          - captured.missing_white (uppercase symbols)
+          - captured.missing_black (lowercase symbols)
+        """
+        if not (self._capt_top_nodes and self._capt_bottom_nodes):
+            return  # safe no-op if init not called yet
+
+        # OTB pile convention + flip awareness:
+        # bottom strip shows opponent pieces captured by the side at the bottom
+        if not self.flipped:
+            bottom_syms = list(getattr(captured, "missing_black", []) or [])
+            top_syms = list(getattr(captured, "missing_white", []) or [])
+        else:
+            bottom_syms = list(getattr(captured, "missing_white", []) or [])
+            top_syms = list(getattr(captured, "missing_black", []) or [])
+
+        # Render the strips
+        bottom_geom = self._layout_captured_strip(self._capt_bottom_nodes, bottom_syms, which="bottom")
+        top_geom = self._layout_captured_strip(self._capt_top_nodes, top_syms, which="top")
+
+        # Compute material advantage based on captures:
+        # White captures = missing_black, Black captures = missing_white
+        white_caps = list(getattr(captured, "missing_black", []) or [])
+        black_caps = list(getattr(captured, "missing_white", []) or [])
+
+        adv = self._capt_material_value(white_caps) - self._capt_material_value(black_caps)
+
+        # Decide which strip each side's captured list is on (flip-aware)
+        if not self.flipped:
+            # bottom = missing_black (White captures), top = missing_white (Black captures)
+            white_strip = bottom_geom
+            black_strip = top_geom
+        else:
+            # bottom = missing_white (Black captures), top = missing_black (White captures)
+            white_strip = top_geom
+            black_strip = bottom_geom
+
+        # Configure labels
+        lw = self._capt_label_white
+        lb = self._capt_label_black
+        if lw is None or lb is None:
+            return
+
+        # Hide by default
+        lw.alpha = 0.0
+        lb.alpha = 0.0
+
+        if adv == 0:
+            return
+
+        # Choose winner label and strip
+        if adv > 0:
+            label = lw
+            geom = white_strip
+            text = f"+{adv}"
+        else:
+            label = lb
+            geom = black_strip
+            text = f"+{abs(adv)}"
+
+        # geom = (right_edge_x, center_y, icon_size)
+        right_x, cy, icon = geom
+        label.text = text
+        # Slightly smaller than the micro pieces, bold
+        label.font = ("Menlo-Bold", max(9, int(round(icon * 0.62))))
+        label.position = (
+            right_x + max(12.0, icon * 0.60),  # increased horizontal margin
+            cy - icon * 0.06,                  # tiny downward correction
+        )
+        label.color = "lightgray"
+        label.alpha = 1.0
+
+    def _layout_captured_strip(self, nodes: list[SpriteNode], syms: list[str], *, which: str):
+        """Position pooled SpriteNodes for one strip."""
+        ox, oy = self.origin
+        s = self.square_size
+
+        # Micro icon size: relative to typical piece sprite sizing (~0.9*s)
+        icon = s * 0.9 * float(self._capt_scale)
+        pad = max(1.0, float(self._capt_pad))
+
+        board_w = 8 * s
+        n = min(len(syms), len(nodes))
+
+        # Default spacing; compress if needed to fit within board width
+        step = icon + pad
+        if n > 0 and (n * step) > board_w:
+            step = board_w / n
+            if step < icon:
+                icon = step * 0.9
+
+        y_gap = max(4.0, s * 0.12)
+        if which == "top":
+            cy = oy + 8 * s + y_gap + icon / 2
+        else:
+            cy = oy - y_gap - icon / 2
+
+        start_x = ox + (step / 2)
+
+        for i, node in enumerate(nodes):
+            if i < n:
+                sym = syms[i]
+                fn = PIECE_SPRITES.get(sym)
+                if fn is None:
+                    node.alpha = 0.0
+                    continue
+                node.texture = self._tex[fn]
+                node.position = (start_x + i * step, cy)
+                node.size = (icon, icon)
+                node.alpha = 1.0
+            else:
+                node.alpha = 0.0
+        
+        # Return geometry for label placement: right edge of last icon, center y, icon size
+        if n > 0:
+            right_edge_x = (start_x + (n - 1) * step) + icon / 2
+        else:
+            right_edge_x = ox  # no pieces; anchor near board left
+        return (right_edge_x, cy, icon)
 
     # ---- drawing ----
 

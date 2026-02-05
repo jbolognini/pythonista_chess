@@ -155,6 +155,7 @@ class ChessScene(Scene):
         self.board_view.compute_geometry()
         self.board_view.draw_squares()
         self.board_view.sync_pieces(self.game.board)
+        self.board_view.refresh_captured_material(self.game.captured_material())
         self.eval_bar.layout_from_board(self.board_view)
         self.board_view.refresh_overlays(self.game.board, self.selected)
 
@@ -216,6 +217,7 @@ class ChessScene(Scene):
         # Sync board visuals
         self.board_view.sync_pieces(self.game.board)
         self.board_view.refresh_overlays(self.game.board, self.selected)
+        self.board_view.refresh_captured_material(self.game.captured_material())
 
         # Cloud lifecycle
         self._clear_cloud_eval()
