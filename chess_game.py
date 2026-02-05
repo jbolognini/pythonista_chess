@@ -605,7 +605,7 @@ class ChessGame:
     def choose_forced_or_book_move(
         self,
         *,
-        randomness: float = 0.25,
+        randomness: float | None = None,
         board: chess.Board | None = None,
     ):
         """
@@ -613,6 +613,8 @@ class ChessGame:
 
         source: "forced" | "book" | None
         """
+        if randomness is None:
+            randomness = self.book_randomness
         b = board or self.board
 
         mv, forced = self.practice_opening_reply(b)
@@ -757,7 +759,10 @@ class ChessGame:
 
     def hud_row2_text(self) -> str:
         if not self.opening_choice:
-            return "Free play"
+            if self.has_book_moves(self.board):
+                return "In book"
+            else:
+                return "Free play"
 
         title = self.opening_title or str(self.opening_choice)
         phase = self.practice_phase

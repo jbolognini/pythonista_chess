@@ -155,7 +155,6 @@ class ChessScene(Scene):
         self.board_view.compute_geometry()
         self.board_view.draw_squares()
         self.board_view.sync_pieces(self.game.board)
-        self.eval_bar.layout_from_board(self.board_view, margin=10, width=14)
         self.board_view.refresh_overlays(self.game.board, self.selected)
 
         # Review overlay geometry
@@ -225,6 +224,7 @@ class ChessScene(Scene):
         self._request_engine_eval()
 
         # AI (optional)
+        # AI
         if allow_ai and not self.review_mode:
             self._schedule_ai_if_needed()
 
@@ -327,16 +327,25 @@ class ChessScene(Scene):
             return
 
         b = self.game.board
+        
+        g = self.game
+        b = g.board
         if b.is_game_over():
             return
         if b.turn != self.game.ai_color:
             return
 
+        # check if ai should play opening practice or book move
+        move, source = g.choose_forced_or_book_move()
+        if source and move and self.game.apply_ai_move(move):
+                self._on_position_changed(reason="ai_move", allow_ai=False)
+                return
+
         self._ai_thinking = True
         self.refresh_hud()
 
         fen = b.fen()
-        level = int(self.game.ai_level)
+        level = int(g.ai_level)
         gen = int(self._ai_gen)
 
         try:
