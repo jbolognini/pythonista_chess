@@ -10,7 +10,7 @@ from chess_game import ChessGame
 from chess_ui import BoardRenderer, HudView, PromotionOverlay, EvalBarView
 from engine_service import EngineService
 
-from sunfish_engine import SunfishEngine
+from local_engine import LocalEngine
 from lichess_engine import LichessCloudEngine
 
 POLYGLOT_DIR = Path("assets/polyglot")
@@ -88,7 +88,7 @@ class ChessScene(Scene):
         self._cloud_engine = LichessCloudEngine()
         
         self.engine_service = EngineService(
-            engine_factory=SunfishEngine,
+            engine_factory=LocalEngine,
             on_ai_result=self._on_ai_result,
             on_eval_result=self._on_eval_result,
             name="LocalEngine",

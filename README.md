@@ -4,7 +4,7 @@
 
 This app is a chess training and play environment with a strong focus on opening practice that blends:
 
-- free play vs AI (Sunfish-based)
+- free play vs AI (local lightweight engine)
 - structured opening training (guided, corrective)
 - optional cloud guidance (Lichess cloud eval) + local book hints
 - human-oriented learning (ideas, traps, punishments)
@@ -69,8 +69,8 @@ The code is organized around a single source of truth for chess rules, practice 
 - Underpromotion chooser (Q/R/B/N) shown only when required
 - Move is committed only after selecting a promotion piece
 
-### AI (Sunfish)
-- Local AI opponent powered by a Sunfish-derived engine
+### AI (Local engine)
+- Local AI opponent powered by a local lightweight alpha-beta pruning + iterative deepening engine
 - Adjustable difficulty levels (1–5)
 - AI can play either side
 
@@ -235,7 +235,7 @@ The phase influences:
 - Suggestion arrows and evaluation bar
 - Promotion overlay UI
 
-### sunfish_engine.py
+### local_engine.py
 - Local AI engine implementation
 - Search, evaluation, and difficulty scaling
 

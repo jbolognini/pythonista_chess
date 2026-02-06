@@ -1,4 +1,4 @@
-# sunfish_engine.py
+# local_engine.py
 import random
 import time
 import chess
@@ -85,7 +85,7 @@ PST = {
 MATE_SCORE = 100_000
 
 
-class SunfishEngine:
+class LocalEngine:
     """
     iOS/Pythonista-stability focused alpha-beta engine.
 
