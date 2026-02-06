@@ -1,4 +1,4 @@
-# Chess Practice App — Progress & Design Notes (v3)
+# Chess Practice App — Progress & Design Notes
 
 ## High-Level Overview
 
