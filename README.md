@@ -254,6 +254,72 @@ The phase influences:
 
 ---
 
+## Installation (Pythonista / iOS)
+
+This app is designed to run in **Pythonista 3 on iOS**.
+
+Because Pythonista does not support standard `pip` installs in the same way as desktop Python, one dependency must be installed manually.
+
+### Dependency: `python-chess`
+
+The app depends on the open-source `python-chess` library.
+
+#### Install steps
+
+1. Download the source code from the official repository:  
+   https://github.com/niklasf/python-chess
+
+2. From the downloaded archive, copy **only** the `chess/` folder.
+
+3. In Pythonista, navigate to:  
+   **`site-packages (user)`**
+
+4. Paste the `chess/` folder directly into `site-packages (user)`.
+
+You should end up with a structure like:
+
+```
+site-packages (user)/
+└── chess/
+    ├── __init__.py
+    ├── board.py
+    ├── pgn.py
+    └── ...
+```
+
+Once installed, the following should work in Pythonista:
+
+```python
+import chess
+```
+
+No other third-party Python packages are required.
+
+---
+
+### Optional Assets
+
+#### Polyglot Opening Books
+
+The app supports Polyglot `.bin` opening book files.
+
+- Place any `.bin` files into:
+  ```
+  assets/polyglot/
+  ```
+- If no book files are present, the app will still run normally; opening-book features will simply be disabled.
+
+---
+
+### Running the App
+
+1. Copy this repository into one of your Pythonista Scripts Libraries, in its own folder, e.g. `/pythonista_chess`.
+2. Open and run `app.py`.
+
+The app is optimized for interactive use on iOS and does not require additional setup.
+
+---
+
 ## Licensing & Credits
 
 ### Source Code
