@@ -1,4 +1,6 @@
-# Chess Practice App — Progress & Design Notes
+# Chess Practice App
+
+![Chess Practice App Screenshot](docs/screenshot.png)
 
 ## High-Level Overview
 
