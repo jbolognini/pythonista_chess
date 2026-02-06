@@ -185,7 +185,7 @@ The phase influences:
 - Persistent settings stored locally
 
 ### Additional Chess App Features
-- Captured material display using micro piece icons above and below the board
+- DONE: Captured material display using micro piece icons above and below the board
 - Analysis mode for exploring variations without affecting the main game
 - Post-game summary (opening reached, theory exit point, major mistakes)
 - Move quality labels (inaccuracy, mistake, blunder)

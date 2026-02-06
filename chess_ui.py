@@ -7,8 +7,26 @@ from scene import Scene, SpriteNode, ShapeNode, LabelNode, Texture
 from chess_game import SuggestMove, arrow_weights
 
 PIECE_SPRITES = {
-    "P": "wp.png", "N": "wn.png", "B": "wb.png", "R": "wr.png", "Q": "wq.png", "K": "wk.png",
-    "p": "bp.png", "n": "bn.png", "b": "bb.png", "r": "br.png", "q": "bq.png", "k": "bk.png",
+    "P": "wp.png", 
+    "N": "wn.png", 
+    "B": "wb.png", 
+    "R": "wr.png", 
+    "Q": "wq.png", 
+    "K": "wk.png",
+    "p": "bp.png", 
+    "n": "bn.png", 
+    "b": "bb.png", 
+    "r": "br.png", 
+    "q": "bq.png", 
+    "k": "bk.png",
+}
+PIECE_HALOS = {
+    "P": "wp_halo.png",
+    "N": "wn_halo.png",
+    "B": "wb_halo.png",
+    "R": "wr_halo.png",
+    "Q": "wq_halo.png",
+    "K": "wk_halo.png",
 }
 
 
@@ -375,11 +393,11 @@ class BoardRenderer:
         self._mark_pool = []             # pooled ShapeNodes for dots/rings
 
         # Captured material UI (micro piece sprites)
-        self._capt_top_nodes: list[SpriteNode] = []
-        self._capt_bottom_nodes: list[SpriteNode] = []
+        self._capt_top_nodes: list[tuple[SpriteNode, SpriteNode]] = []
+        self._capt_bottom_nodes: list[tuple[SpriteNode, SpriteNode]] = []
         self._capt_max: int = 16
-        self._capt_scale: float = 0.35   # micro size relative to piece size
-        self._capt_pad: float = 2.0      # spacing in px-ish units
+        self._capt_scale: float = 0.35 # micro size relative to piece size
+        self._capt_pad: float = 2.0 # spacing in px-ish units
         self._capt_label_white: LabelNode | None = None  # label for White's captures (missing_black)
         self._capt_label_black: LabelNode | None = None  # label for Black's captures (missing_white)
 
@@ -389,9 +407,19 @@ class BoardRenderer:
         # textures (scene can share)
         self._tex = getattr(scene, "_tex", None)
         if self._tex is None:
-            self._tex = {fn: Texture(f"assets/sprites/{fn}") for fn in PIECE_SPRITES.values()}
+            self._tex = {}
+            # Load normal piece textures
+            for fn in PIECE_SPRITES.values():
+                self._tex[fn] = Texture(f"assets/sprites/{fn}")
+            # Load halo textures (if present)
+            for fn in PIECE_HALOS.values():
+                try:
+                    self._tex[fn] = Texture(f"assets/sprites/{fn}")
+                except Exception:
+                    # Safe if halos aren't generated/copied yet
+                    pass
             scene._tex = self._tex
-
+    
         # marker pool
         for _ in range(32):
             n = ShapeNode()
@@ -463,35 +491,50 @@ class BoardRenderer:
         """Create pooled SpriteNodes for captured-material strips (top/bottom)."""
         if self._capt_top_nodes or self._capt_bottom_nodes:
             return
-
+        
         # Placeholder texture; nodes start hidden
         placeholder = self._tex[PIECE_SPRITES["P"]]
-
         z = 60  # above marks/pieces, below HUD
-        for _ in range(self._capt_max):
-            n = SpriteNode(placeholder)
-            n.z_position = z
-            n.alpha = 0.0
-            self.scene.add_child(n)
-            self._capt_top_nodes.append(n)
+        halo_color = "FFFFFF"
 
         for _ in range(self._capt_max):
-            n = SpriteNode(placeholder)
-            n.z_position = z
-            n.alpha = 0.0
-            self.scene.add_child(n)
-            self._capt_bottom_nodes.append(n)
+            halo = SpriteNode(placeholder)
+            halo.z_position = z
+            halo.alpha = 0.0
+            halo.color = halo_color
+            self.scene.add_child(halo)
         
+            fg = SpriteNode(placeholder)
+            fg.z_position = z + 0.1  # ensure above halo
+            fg.alpha = 0.0
+            self.scene.add_child(fg)
+        
+            self._capt_top_nodes.append((halo, fg))
+        
+        for _ in range(self._capt_max):
+            halo = SpriteNode(placeholder)
+            halo.z_position = z
+            halo.alpha = 0.0
+            halo.color = halo_color
+            self.scene.add_child(halo)
+        
+            fg = SpriteNode(placeholder)
+            fg.z_position = z + 1
+            fg.alpha = 0.0
+            self.scene.add_child(fg)
+        
+            self._capt_bottom_nodes.append((halo, fg))
+
         # Labels (hidden by default)
         lw = LabelNode("")
-        lw.z_position = z + 1
+        lw.z_position = z + 2
         lw.color = "white"
         lw.alpha = 0.0
         self.scene.add_child(lw)
         self._capt_label_white = lw
 
         lb = LabelNode("")
-        lb.z_position = z + 1
+        lb.z_position = z + 2
         lb.color = "white"
         lb.alpha = 0.0
         self.scene.add_child(lb)
@@ -614,20 +657,52 @@ class BoardRenderer:
 
         start_x = ox + (step / 2)
 
-        for i, node in enumerate(nodes):
-            if i < n:
-                sym = syms[i]
-                fn = PIECE_SPRITES.get(sym)
-                if fn is None:
-                    node.alpha = 0.0
-                    continue
-                node.texture = self._tex[fn]
-                node.position = (start_x + i * step, cy)
-                node.size = (icon, icon)
-                node.alpha = 1.0
-            else:
-                node.alpha = 0.0
+        for i, pair in enumerate(nodes):
+            halo, fg = pair
         
+            # Hide unused pooled nodes
+            if i >= n:
+                halo.alpha = 0.0
+                fg.alpha = 0.0
+                continue
+        
+            sym = syms[i]
+            fn = PIECE_SPRITES.get(sym)
+            if fn is None:
+                halo.alpha = 0.0
+                fg.alpha = 0.0
+                continue
+        
+            x = start_x + i * step
+            tex_fg = self._tex[fn]
+        
+            # Foreground piece
+            fg.texture = tex_fg
+            fg.position = (x, cy)
+            fg.size = (icon, icon)
+            fg.alpha = 1.0
+            fg.color = "white"
+        
+            # Halo: use precomputed halo texture behind both colors
+            halo_fn = PIECE_HALOS.get(sym.upper())
+            if halo_fn:
+                halo.texture = self._tex[halo_fn]
+                halo.position = (x, cy)
+                
+            
+                if sym.islower():
+                    # Black piece halo
+                    halo.size = (icon * 1.08, icon * 1.08)
+                    halo.color = "white"
+                    halo.alpha = 0.20
+                else:
+                    # White piece halo
+                    halo.size = (icon * 1.05, icon * 1.05)
+                    halo.color = "white"
+                    halo.alpha = 0.15
+            else:
+                halo.alpha = 0.0
+                                    
         # Return geometry for label placement: right edge of last icon, center y, icon size
         if n > 0:
             right_edge_x = (start_x + (n - 1) * step) + icon / 2

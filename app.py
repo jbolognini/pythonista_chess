@@ -42,10 +42,7 @@ class Menu(ui.View):
         self.subtitle.frame = (0, 100, w, 20)
 
         self.btn_new.frame = (
-            (w - 220) / 2,
-            160,
-            220,
-            48
+            (w - 220) / 2, 160, 220, 48
         )
 
     def new_game(self, sender):
