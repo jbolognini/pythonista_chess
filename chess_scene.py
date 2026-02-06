@@ -1,5 +1,6 @@
 # chess_scene.py
 import math
+from pathlib import Path
 import traceback
 import ui
 import chess
@@ -12,6 +13,7 @@ from engine_service import EngineService
 from sunfish_engine import SunfishEngine
 from lichess_engine import LichessCloudEngine
 
+POLYGLOT_DIR = Path("assets/polyglot")
 
 REVIEW_OVERLAY_ALPHA = 0.20
 
@@ -72,13 +74,19 @@ class ChessScene(Scene):
         self._review_entry_selected = None
 
     # -----------------------------------------------
-    # Scene lifecycle
+    # --- Scene lifecycle
     # -----------------------------------------------
     def setup(self):
-        self._last_eval_request_fen = None
-        # ----- Engines -----
+        
+        # Optional Polyglot opening book (user-supplied)
+        book_path = self._find_polyglot_book_path()
+        self.game.book_path = book_path
+        if book_path is None:
+            self.game.use_book = False
+        
+        # Engines
         self._cloud_engine = LichessCloudEngine()
-
+        
         self.engine_service = EngineService(
             engine_factory=SunfishEngine,
             on_ai_result=self._on_ai_result,
@@ -86,20 +94,20 @@ class ChessScene(Scene):
             name="LocalEngine",
         )
         self.engine_service.start()
-
-        # ----- Rendering -----
+        
+        # Rendering
         self.board_view = BoardRenderer(self)
         self.hud = HudView(self, z=200)
         self.promo = PromotionOverlay(self, z=210)
         self.eval_bar = EvalBarView(self, z=140)
 
-        # ----- Selection / promotion -----
+        # Selection / promotion
         self.selected = None
         self._promo_active = False
         self._promo_from = None
         self._promo_to = None
 
-        # ----- Review overlay -----
+        # Review overlay
         self._review_overlay = ShapeNode()
         self._review_overlay.z_position = 150
         self._review_overlay.alpha = 0.0
@@ -129,7 +137,7 @@ class ChessScene(Scene):
         self._ai_thinking = False
 
     # -----------------------------------------------
-    # Layout / drawing
+    # --- Layout / drawing
     # -----------------------------------------------
     def did_change_size(self):
         if not self.ready:
@@ -189,7 +197,7 @@ class ChessScene(Scene):
             cb()
 
     # -----------------------------------------------
-    # Centralized position change hook
+    # --- Centralized position change hook
     # -----------------------------------------------
     def _on_position_changed(self, *, reason: str = "", allow_ai: bool = True):
         """
@@ -233,7 +241,7 @@ class ChessScene(Scene):
         self.refresh_hud()
 
     # -----------------------------------------------
-    # Settings
+    # --- Settings
     # -----------------------------------------------
     def apply_settings(
         self,
@@ -260,8 +268,24 @@ class ChessScene(Scene):
         self.redraw_all()
         self._on_position_changed(reason="settings", allow_ai=True)
 
+    def _find_polyglot_book_path(self) -> str | None:
+        """
+        Return the first .bin file found in POLYGLOT_DIR (sorted), else None.
+        """
+        try:
+            if not POLYGLOT_DIR.exists():
+                return None
+    
+            bins = sorted(p for p in POLYGLOT_DIR.iterdir() if p.suffix.lower() == ".bin")
+            if not bins:
+                return None
+    
+            return str(bins[0])
+        except Exception:
+            return None
+
     # -----------------------------------------------
-    # Local eval (EngineService)
+    # --- Local eval (EngineService)
     # -----------------------------------------------
     def _request_engine_eval(self):
         '''
@@ -320,7 +344,7 @@ class ChessScene(Scene):
         self._pending_eval_result = (gen, fen, white_cp)
             
     # -----------------------------------------------
-    # AI scheduling (EngineService)
+    # --- AI scheduling (EngineService)
     # -----------------------------------------------
     def _schedule_ai_if_needed(self):
         if not self.engine_service:
@@ -391,7 +415,7 @@ class ChessScene(Scene):
         self._pending_ai_result = (gen, fen, move, white_cp)
 
     # -----------------------------------------------
-    # Review / history navigation mode
+    # --- Review / history navigation mode
     # -----------------------------------------------
     def begin_review_mode(self):
         if not self.ready or self.review_mode:
@@ -438,7 +462,7 @@ class ChessScene(Scene):
         self._on_position_changed(reason="end_review", allow_ai=True)
 
     # -----------------------------------------------
-    # Cloud eval
+    # --- Cloud eval
     # -----------------------------------------------
     def _queue_cloud_eval(self):
         if self.game.practice_phase == "READY":
@@ -528,7 +552,7 @@ class ChessScene(Scene):
         self.game.suggested_moves = []
 
     # -----------------------------------------------
-    # Game lifecycle
+    # --- Game lifecycle
     # -----------------------------------------------
     def reset(self):
         if not self.ready:
@@ -563,7 +587,7 @@ class ChessScene(Scene):
         return True
 
     # -----------------------------------------------
-    # Promotion
+    # --- Promotion
     # -----------------------------------------------
     def _clear_promotion_ui(self):
         self._promo_active = False
@@ -589,7 +613,7 @@ class ChessScene(Scene):
             self._on_position_changed(reason="promotion", allow_ai=True)
 
     # -----------------------------------------------
-    # Input
+    # --- Input
     # -----------------------------------------------
     def touch_ended(self, touch):
         if not self.ready:
@@ -662,7 +686,7 @@ class ChessScene(Scene):
         self.refresh_hud()
 
     # -----------------------------------------------
-    # Import / Export
+    # --- Import / Export
     # -----------------------------------------------
     def import_text(self, text):
         ok, msg = self.game.import_pgn_or_fen(text)

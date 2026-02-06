@@ -78,10 +78,14 @@ The code is organized around a single source of truth for chess rules, practice 
 - Vertical evaluation bar indicating side advantage
 - Evaluation updates as positions change and reflects board orientation
 
+### Captured Material
+- Captured material display using micro piece icons above and below the board
+
 ### Opening Book + “Theory”
 - Polyglot book support for non-practice play
 - In-theory vs out-of-book detection
 - Weighted randomness for book move selection
+- Polyglot opening books are user-supplied and not included in the repository. Place `.bin` files in `assets/polyglot/` to enable local book support.
 
 ### Cloud Guidance (Lichess)
 - Optional Lichess cloud evaluation
@@ -185,7 +189,6 @@ The phase influences:
 - Persistent settings stored locally
 
 ### Additional Chess App Features
-- DONE: Captured material display using micro piece icons above and below the board
 - Analysis mode for exploring variations without affecting the main game
 - Post-game summary (opening reached, theory exit point, major mistakes)
 - Move quality labels (inaccuracy, mistake, blunder)
@@ -248,3 +251,14 @@ The phase influences:
 ### openings.py
 - Opening library and practice definitions
 - Tiered SAN lines with instructional notes
+
+---
+
+## Licensing & Credits
+
+### Source Code
+All source code in this repository is licensed under the MIT License. See `LICENSE`.
+
+### Assets
+Chess piece sprites are derived from the Cburnett SVG chess set and are licensed under
+Creative Commons Attribution-ShareAlike 3.0 (CC BY-SA 3.0). See `CREDITS.md` for details.

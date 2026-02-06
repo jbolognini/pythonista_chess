@@ -98,7 +98,7 @@ class ChessGame:
 
         # Book settings
         self.use_book = True
-        self.book_path = "assets/polyglot/dara.bin"
+        self.book_path = None
         self.book_randomness = 0.25
 
         # Practice/opening selection
