@@ -534,7 +534,7 @@ class ImportView(ui.View):
 class GameView(ui.View):
     def __init__(self):
         super().__init__()
-        self.name = "Bol Chess"
+        self.name = "Chess Practice"
         self.background_color = "white"
 
         # Top bar (toolbar)

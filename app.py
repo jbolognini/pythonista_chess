@@ -5,12 +5,12 @@ from game_view import GameView
 class Menu(ui.View):
     def __init__(self):
         super().__init__()
-        self.name = "Bol Chess"
+        self.name = "Chess Practice App"
         self.background_color = "white"
 
         # Title
         self.title_label = ui.Label()
-        self.title_label.text = "Bol Chess"
+        self.title_label.text = "Chess Practice"
         self.title_label.font = ("<System-Bold>", 28)
         self.title_label.alignment = ui.ALIGN_CENTER
         self.title_label.text_color = "#222"
