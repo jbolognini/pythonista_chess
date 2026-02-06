@@ -10,7 +10,7 @@ class Menu(ui.View):
 
         # Title
         self.title_label = ui.Label()
-        self.title_label.text = "Chess Practice"
+        self.title_label.text = "Chess Practice App"
         self.title_label.font = ("<System-Bold>", 28)
         self.title_label.alignment = ui.ALIGN_CENTER
         self.title_label.text_color = "#222"
